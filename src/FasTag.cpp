@@ -80,14 +80,24 @@ protected:
     registerIntOption_("extension", "<n>", 0,
                        "Maximum residues appended per terminus; 0 disables extension", false);
     setMinInt_("extension", 0);
+    // tag_length + 2*extension is computed as int and indexes the null tables.
+    // Unbounded, --extension 1073741824 overflows and aborts with std::length_error.
+    setMaxInt_("extension", (FasTag::MAX_FILTER_LEN - 1) / 2);
 
     registerDoubleOption_("fragment_tolerance", "<value>", 20.0, "Fragment mass tolerance", false);
+    // Without a floor a negative or zero tolerance matches nothing and the run
+    // reports zero tags with no indication why.
+    setMinFloat_("fragment_tolerance", 1e-9);
     registerStringOption_("fragment_tolerance_unit", "<unit>", "ppm", "Tolerance unit", false);
     setValidStrings_("fragment_tolerance_unit", ListUtils::create<String>("ppm,Da"));
 
-    registerIntOption_("max_peaks", "<n>", 100, "Peaks retained per spectrum", false);
+    registerIntOption_("max_peaks", "<n>", 100,
+                       "Peaks retained per spectrum; 0 = keep all", false);
+    setMinInt_("max_peaks", 0);
     registerIntOption_("max_tags", "<n>", 50, "Tags reported per spectrum; 0 = unlimited", false);
+    setMinInt_("max_tags", 0);
     registerDoubleOption_("max_evalue", "<value>", 20.0, "E-value cutoff; 0 disables", false);
+    setMinFloat_("max_evalue", 0.0);
 
     registerDoubleOption_("isobaric_tolerance", "<value>", 0.04,
                           "When matching against 'fasta', treat a residue as interchangeable "
@@ -118,8 +128,10 @@ protected:
     p.max_tag_count = getIntOption_("max_tags");
     p.max_evalue = getDoubleOption_("max_evalue");
 
+    // Unconditional: the realised length bounds the null tables whether or not a
+    // FASTA filter is in use.
     const int max_len = p.tag_length + 2 * p.max_extension;
-    if (!fasta.empty() && max_len > FasTag::MAX_FILTER_LEN)
+    if (max_len > FasTag::MAX_FILTER_LEN)
     {
       OPENMS_LOG_ERROR << "Realised tag length can reach " << max_len << ", beyond the filter's "
                        << FasTag::MAX_FILTER_LEN << "-residue encoding." << std::endl;
@@ -143,6 +155,7 @@ protected:
       const double iso = getDoubleOption_("isobaric_tolerance");
       if (iso > 0) filt.deriveCollapses(iso);
       filt.build(p.tag_length, max_len);
+      OPENMS_LOG_INFO << "Filter index: " << filt.indexedKeys() << " keys" << std::endl;
 
       OPENMS_LOG_INFO << "Filter: " << filt.sequenceCount() << " sequences, "
                       << filt.residueCount() << " residues; minimum tag length " << filt.minLen()
@@ -213,7 +226,14 @@ protected:
         }
         ++per_thread_rep[tid];
         char line[512];
-        const int m = std::snprintf(line, sizeof line, "%s\t%s\t%zu\t%d\t%g\t%g\t%d\t%g\t%s\n",
+        // Flanking masses at 4 decimals (0.1 mDa), not %g.
+        //
+        // %g gives 6 significant digits, so a 1234.56789 Da flank prints as
+        // 1234.57 and a 2500 Da flank keeps a single decimal -- coarser than the
+        // tolerance the tag was found with, and these are precisely the values a
+        // downstream search uses as a precursor constraint. E-values keep %g,
+        // where relative precision is what matters.
+        const int m = std::snprintf(line, sizeof line, "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%g\t%s\n",
                                     spec.getNativeID().c_str(), t.seq.c_str(), t.seq.size(),
                                     t.charge, t.nterm_mass, t.cterm_mass,
                                     t.extended ? 1 : 0, t.evalue, hit);

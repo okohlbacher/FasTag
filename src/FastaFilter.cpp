@@ -5,6 +5,8 @@
 
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
+#include <OpenMS/CONCEPT/Exception.h>
+#include <OpenMS/DATASTRUCTURES/String.h>
 
 #include <algorithm>
 #include <cmath>
@@ -113,11 +115,61 @@ namespace FasTag
         }
   }
 
-  void FastaFilter::build(int min_k, int max_k)
+  size_t FastaFilter::projectBytes(int min_k, int max_k) const
   {
+    // Distinct k-mers are bounded by both the residue count and the alphabet
+    // space; short k saturates the alphabet, long k saturates the sequence.
+    // 48 bytes/key is measured steady-state for unordered_set<__uint128_t>.
     min_k = std::max(min_k, minLen());
     max_k = std::min(max_k, MAX_FILTER_LEN);
-    if (max_k < min_k) return;
+    double total = 0;
+    for (int k = min_k; k <= max_k; ++k)
+    {
+      double space = 1.0;
+      for (int i = 0; i < k && space < 4e18; ++i) space *= 19.0;
+      const double n = std::min(static_cast<double>(residues_), space);
+      total += n * (rules_.empty() ? 1.0 : 1.6);   // collapse readings inflate the set
+    }
+    return static_cast<size_t>(total * 48.0);
+  }
+
+  size_t FastaFilter::indexedKeys() const
+  {
+    size_t n = 0;
+    for (const auto& s : sets_) n += s.size();
+    return n;
+  }
+
+  void FastaFilter::build(int min_k, int max_k, size_t max_bytes)
+  {
+    const size_t projected = projectBytes(min_k, max_k);
+    if (projected > max_bytes)
+    {
+      throw Exception::InvalidValue(
+          __FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+          "FASTA index would need about " + String(projected / (1024 * 1024)) +
+          " MB, above the " + String(max_bytes / (1024 * 1024)) + " MB limit. "
+          "Reduce 'extension', raise 'min_filter_length', or use a smaller database.",
+          String(projected));
+    }
+    const int floor_k = minLen();
+    min_k = std::max(min_k, floor_k);
+    max_k = std::min(max_k, MAX_FILTER_LEN);
+    if (max_k < min_k)
+    {
+      // No tag this run can produce is long enough to be worth matching, so the
+      // filter would reject every tag while reporting "0 hits" as if that were a
+      // result. Refuse loudly instead: silence here is indistinguishable from a
+      // genuine absence of evidence.
+      throw Exception::InvalidValue(
+          __FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+          "No reportable tag can reach the minimum filter length. This database of " +
+          String(residues_) + " residues needs tags of at least " + String(floor_k) +
+          " residues to beat chance, but the longest tag this run can produce is " +
+          String(max_k) + ". Raise 'tag_length' or 'extension', or set "
+          "'min_filter_length' explicitly to accept a higher chance-match rate.",
+          String(floor_k));
+    }
     sets_.resize(static_cast<size_t>(max_k) + 1);
     built_.resize(static_cast<size_t>(max_k) + 1, 0);
 

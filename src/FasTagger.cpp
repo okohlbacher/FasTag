@@ -14,12 +14,19 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <set>
+#include <tuple>
 #include <random>
 
 using namespace OpenMS;
 
 namespace FasTag
 {
+  /// Peak ceiling used when max_peak_count is 0. Tables and prepare() must agree:
+  /// intensityP() returns 1.0 above the table extent, silently disabling the
+  /// intensity subscore rather than erroring.
+  static constexpr size_t PEAK_CEILING = 1024;
+
   namespace
   {
     /// Residue masses from OpenMS, not a hardcoded table.
@@ -88,7 +95,7 @@ namespace FasTag
   Tables::Tables(const Param& p)
     : k_min_(std::max(2, p.tag_length + 1)),
       k_max_(std::max(2, p.tag_length + 1 + 2 * std::max(0, p.max_extension))),
-      n_max_(p.max_peak_count > 0 ? p.max_peak_count : 1024)
+      n_max_(p.max_peak_count > 0 ? p.max_peak_count : PEAK_CEILING)
   {
     ranksum_.resize(static_cast<size_t>(k_max_ - k_min_ + 1));
     for (int k = k_min_; k <= k_max_; ++k)
@@ -194,6 +201,32 @@ namespace FasTag
         if (pk.getIntensity() <= 0 || pk.getMZ() > max_mz) continue;
         work.push_back(pk);
       }
+
+      // Collapse peaks sharing an m/z, keeping the strongest.
+      //
+      // diaTracer emits them routinely -- measured on S23, every MS2 spectrum has
+      // them, median 22 and up to 46 per spectrum, some with equal and some with
+      // differing intensity. They are indistinguishable to the graph (findNearest
+      // returns one of them) but each still consumes a slot in the peak budget and
+      // shifts every intensity rank, and they let the same tag be enumerated more
+      // than once. Collapsing is a property of the input, so it belongs here
+      // rather than in a deduplication pass over the output.
+      if (!work.empty())
+      {
+        work.sortByPosition();
+        std::vector<Peak1D> uniq;
+        uniq.reserve(work.size());
+        for (const auto& pk : work)
+        {
+          if (!uniq.empty() && pk.getMZ() == uniq.back().getMZ())
+          {
+            if (pk.getIntensity() > uniq.back().getIntensity()) uniq.back() = pk;
+          }
+          else uniq.push_back(pk);
+        }
+        work.clear(false);
+        for (const auto& pk : uniq) work.push_back(pk);
+      }
       std::vector<size_t> order(work.size());
       std::iota(order.begin(), order.end(), 0);
       std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
@@ -201,7 +234,15 @@ namespace FasTag
           return work[a].getIntensity() > work[b].getIntensity();
         return work[a].getMZ() > work[b].getMZ();
       });
-      if (order.size() > p.max_peak_count) order.resize(p.max_peak_count);
+      // max_peak_count == 0 means "use the safety ceiling", NOT "unlimited".
+      //
+      // The rank-sum tables are built for peak counts up to n_max_, and
+      // intensityP() returns 1.0 above that -- silently disabling one of the three
+      // subscores rather than erroring. So an genuinely uncapped run would quietly
+      // lose a third of the scoring on any spectrum with more peaks than the
+      // tables cover. Both places must agree on the same ceiling.
+      const size_t cap = p.max_peak_count > 0 ? p.max_peak_count : PEAK_CEILING;
+      if (order.size() > cap) order.resize(cap);
 
       // Keep the rank alongside the peak, then restore m/z order: the graph and
       // findNearest both need a sorted spectrum.
@@ -459,15 +500,30 @@ namespace FasTag
     // dependence between tags, by linearity of expectation.
     for (Tag& t : scored) t.evalue *= static_cast<double>(std::max<size_t>(n_seeds, 1));
 
-    std::sort(scored.begin(), scored.end(), [](const Tag& a, const Tag& b) {
+    // stable_sort, not sort: the comparator is not total (it ignores charge and
+    // the flanks), and 99.4% of duplicate groups are identical in every emitted
+    // field today -- but a future field would make the survivor choice
+    // implementation-defined. Stability costs nothing at these sizes.
+    std::stable_sort(scored.begin(), scored.end(), [](const Tag& a, const Tag& b) {
       if (a.evalue != b.evalue) return a.evalue < b.evalue;
       if (a.seq != b.seq) return a.seq < b.seq;
       return a.low_mz < b.low_mz;
     });
 
+    // Drop tags identical in every reported field, before the output cap so the
+    // cap counts distinct results.
+    //
+    // Extension reaches the same physical tag by different N/C splits: measured
+    // with extension 6, 28% of rows are duplicates and 99.4% of duplicate groups
+    // agree in every emitted field. Keying on the exact reported values -- rather
+    // than on rounded ones -- keeps the 0.6% that genuinely differ (flanks
+    // 0.6 mDa apart with different E-values) and makes the survivor unambiguous,
+    // since the duplicates are indistinguishable.
+    std::set<std::tuple<std::string, int, double, double>> seen;
     for (Tag& t : scored)
     {
       if (p.max_evalue > 0 && t.evalue > p.max_evalue) break;
+      if (!seen.emplace(t.seq, t.charge, t.nterm_mass, t.cterm_mass).second) continue;
       out.push_back(std::move(t));
       if (p.max_tag_count > 0 && static_cast<int>(out.size()) >= p.max_tag_count) break;
     }

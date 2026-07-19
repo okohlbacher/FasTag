@@ -88,7 +88,22 @@ namespace FasTag
 
     /// Build indices for every length that can occur. Call once, after load()
     /// and any deriveCollapses(); the filter is immutable and thread-safe after.
-    void build(int min_k, int max_k);
+    ///
+    /// A separate full index is materialised per length, so the footprint scales
+    /// with (database residues x number of lengths) -- roughly 2.4 GB for a 3 M
+    /// residue database at seed 6 with extension 6, and far more for a proteome.
+    /// Above @p max_bytes this THROWS rather than returning a status: every
+    /// caller would otherwise have to remember to check, and a filter that
+    /// silently built nothing would reject 100% of tags while looking healthy.
+    ///
+    /// @throws OpenMS::Exception::InvalidValue if the projection exceeds max_bytes
+    void build(int min_k, int max_k, size_t max_bytes = size_t(4) << 30);
+
+    /// Projected index footprint in bytes for the given length range.
+    size_t projectBytes(int min_k, int max_k) const;
+
+    /// Keys actually indexed, valid after build().
+    size_t indexedKeys() const;
 
     Hit match(const std::string& tag) const;
 
