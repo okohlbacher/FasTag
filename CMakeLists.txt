@@ -16,7 +16,7 @@ target_include_directories(fastag_core INTERFACE
 target_compile_features(fastag_core INTERFACE cxx_std_17)
 
 if(FASTAG_BUILD_TOOL)
-  # OpenMS 3.6 (currently the develop branch; 3.5 lacks APIs used here).
+  # OpenMS 3.5 or newer.
   # Point CMake at your build with -DOpenMS_DIR=/path/to/OpenMS-build
   find_package(OpenMS REQUIRED)
   add_executable(FasTag src/FasTag.cpp)

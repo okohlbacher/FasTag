@@ -46,7 +46,11 @@ class TOPPFasTag : public TOPPBase
 {
 public:
   TOPPFasTag()
-    : TOPPBase("FasTag", "Infers partial sequence tags from MS/MS spectra.", true,
+    // `official = false`: FasTag lives outside the OpenMS tree, so it is not in
+    // ToolHandler's list of official TOPP tools. Passing true makes the TOPPBase
+    // constructor throw InvalidValue on startup. Everything else -- INI files,
+    // -write_ini, standard parameters, logging -- is unaffected.
+    : TOPPBase("FasTag", "Infers partial sequence tags from MS/MS spectra.", false,
                {{"Tabb DL, Ma ZQ, Martin DB, Ham AJ, Chambers MC",
                  "DirecTag: accurate sequence tags from peptide MS/MS through statistical scoring",
                  "J Proteome Res 2008; 7(9): 3838-46", "10.1021/pr800154p"}})
@@ -57,17 +61,17 @@ protected:
   void registerOptionsAndFlags_() override
   {
     registerInputFile_("in", "<file>", "", "Input spectra");
-    setValidFormats_("in", ListUtils::create<std::string>("mzML"));
+    setValidFormats_("in", ListUtils::create<String>("mzML"));
 
     registerOutputFile_("out", "<file>", "", "Tag list (tab-separated)");
-    setValidFormats_("out", ListUtils::create<std::string>("tsv"));
+    setValidFormats_("out", ListUtils::create<String>("tsv"));
 
     registerInputFile_("fasta", "<file>", "", "Report only tags that occur in these sequences", false);
-    setValidFormats_("fasta", ListUtils::create<std::string>("fasta"));
+    setValidFormats_("fasta", ListUtils::create<String>("fasta"));
 
     registerOutputFile_("out_spectra", "<file>", "",
                         "Write spectra carrying a reported tag to this mzML", false);
-    setValidFormats_("out_spectra", ListUtils::create<std::string>("mzML"));
+    setValidFormats_("out_spectra", ListUtils::create<String>("mzML"));
 
     registerIntOption_("tag_length", "<n>", 3, "Seed tag length in residues", false);
     setMinInt_("tag_length", 1);
@@ -78,7 +82,7 @@ protected:
     registerDoubleOption_("fragment_tolerance", "<value>", 20.0, "Fragment mass tolerance", false);
     registerStringOption_("fragment_tolerance_unit", "<unit>", "ppm", "Unit of the fragment tolerance",
                           false);
-    setValidStrings_("fragment_tolerance_unit", ListUtils::create<std::string>("ppm,Da"));
+    setValidStrings_("fragment_tolerance_unit", ListUtils::create<String>("ppm,Da"));
 
     registerIntOption_("max_peaks", "<n>", 100, "Peaks retained per spectrum", false);
     registerIntOption_("max_tags", "<n>", 50, "Tags reported per spectrum", false);
@@ -96,7 +100,7 @@ protected:
                           "Match a tag as written, or also reversed. Tags are stored N->C under a "
                           "y-ion assumption, so b-derived tags read reversed relative to the "
                           "sequence", false);
-    setValidStrings_("orientation", ListUtils::create<std::string>("both,forward"));
+    setValidStrings_("orientation", ListUtils::create<String>("both,forward"));
   }
 
   ExitCodes main_(int, const char**) override
@@ -140,13 +144,11 @@ protected:
         OPENMS_LOG_ERROR << "No sequences in " << fasta << std::endl;
         return INPUT_FILE_EMPTY;
       }
-      String tmp = File::getTemporaryFile();
-      {
-        std::ofstream f(tmp.c_str());
-        for (const auto& e : entries) f << ">" << e.identifier << "\n" << e.sequence << "\n";
-      }
+      std::vector<std::string> seqs;
+      seqs.reserve(entries.size());
+      for (const auto& e : entries) seqs.push_back(std::string(e.sequence));
       std::string err;
-      if (!filt.load(tmp, &err))
+      if (!filt.loadSequences(seqs, &err))
       {
         OPENMS_LOG_ERROR << err << std::endl;
         return INPUT_FILE_CORRUPT;

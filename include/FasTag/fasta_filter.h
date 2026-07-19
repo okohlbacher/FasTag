@@ -74,6 +74,36 @@ namespace fastag
       st_.both_orientations = both_orientations;
     }
 
+    /// Normalise one residue for indexing: upper-case, I folded to L, ambiguity
+    /// codes replaced by a sentinel no tag can contain. Returns 0 to skip.
+    static char normResidue(char c)
+    {
+      if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+      if (c < 'A' || c > 'Z') return 0;                 // digits, gaps, '*'
+      // Ambiguity codes must not become matchable residues: an indexed 'X' would
+      // match a tag spelling X, and B/Z/J each stand for two residues.
+      if (c == 'X' || c == 'B' || c == 'Z' || c == 'J' || c == 'U' || c == 'O') return AMBIG;
+      return c == 'I' ? 'L' : c;
+    }
+
+    /// Adopt sequences that a caller already parsed (e.g. OpenMS FASTAFile), so
+    /// the tool need not round-trip through a temporary file.
+    bool loadSequences(const std::vector<std::string>& seqs, std::string* err = nullptr)
+    {
+      for (const auto& raw : seqs)
+      {
+        std::string cur;
+        cur.reserve(raw.size());
+        for (char c : raw) { const char n = normResidue(c); if (n) cur.push_back(n); }
+        if (cur.empty()) continue;
+        st_.residues += cur.size();
+        ++st_.sequences;
+        seqs_.push_back(std::move(cur));
+      }
+      if (seqs_.empty()) { if (err) *err = "no usable sequence"; return false; }
+      return true;
+    }
+
     /// Parse FASTA. Headers are excluded and wrapped lines joined -- matching the
     /// raw bytes would both match header text and miss sequences split by newline.
     bool load(const std::string& path, std::string* err = nullptr)
@@ -92,18 +122,7 @@ namespace fastag
       {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (!line.empty() && line[0] == '>') { flush(); continue; }
-        for (char c : line)
-        {
-          if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-          if (c < 'A' || c > 'Z') continue;              // digits, gaps, '*'
-          // Ambiguity codes must not become matchable residues: an indexed 'X'
-          // would match a tag spelling X, and B/Z/J stand for two residues each.
-          // Mark them as a wildcard that no tag can contain, so k-mers spanning
-          // them are simply never indexed.
-          if (c == 'X' || c == 'B' || c == 'Z' || c == 'J' || c == 'U' || c == 'O')
-            c = AMBIG;
-          cur.push_back(c == 'I' ? 'L' : c);
-        }
+        for (char c : line) { const char n = normResidue(c); if (n) cur.push_back(n); }
       }
       flush();
       if (seqs_.empty()) { if (err) *err = "FASTA contains no sequence: " + path; return false; }
@@ -217,7 +236,7 @@ namespace fastag
     {
       if (k < 1 || k > MAX_FILTER_LEN) return;
       if (static_cast<size_t>(k) < sets_.size() && built_[k]) return;
-      if (sets_.size() <= static_cast<size_t>(k)) { sets_.resize(k + 1); built_.resize(k + 1, false); }
+      if (sets_.size() <= static_cast<size_t>(k)) { sets_.resize(k + 1); built_.resize(k + 1, 0); }
       auto& s = sets_[k];
       for (const auto& seq : seqs_)
       {
@@ -304,7 +323,7 @@ namespace fastag
     double collapse_tol_ = 0.0;
     std::vector<std::string> seqs_;
     std::vector<std::unordered_set<__uint128_t, Kmer128Hash>> sets_;
-    std::vector<bool> built_;
+    std::vector<char> built_;   ///< not vector<bool>: bit-packing buys nothing for a few entries
     Stats st_;
   };
 }
