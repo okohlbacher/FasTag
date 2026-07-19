@@ -203,8 +203,17 @@ int main()
     for (const auto& pk : y) if (std::fabs(pk.getMZ() - drop) > 1e-6) holed.push_back(pk);
     holed.sortByPosition();
 
+    // Uncapped deliberately. This checks that the gap machinery SPELLS the
+    // peptide correctly, which is a different question from whether it ranks it
+    // highly. On this spectrum -- 14 y ions, no b ions, no noise -- gap edges
+    // join nearly arbitrary peak pairs and the correct tag lands at rank 59, so
+    // a top-50 cap would hide it and this test would report an ordering failure
+    // that is really a ranking one. Real spectra carry ~100 peaks and measure
+    // far better (see Gapped-Tags-Results); the rank is printed below so a
+    // regression in it stays visible.
     FasTag::Param off;
-    off.frag_tol = 0.02; off.tol_ppm = false; off.complement_tol = 0.02; off.tag_length = 6;
+    off.frag_tol = 0.02; off.tol_ppm = false; off.complement_tol = 0.02;
+    off.tag_length = 6; off.max_tag_count = 0; off.max_evalue = 0;
     FasTag::Param on = off; on.max_gaps = 1;
     const FasTag::Tables tf(off), tn(on);
 

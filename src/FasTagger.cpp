@@ -32,18 +32,31 @@ namespace FasTag
   /// pathologically wide tolerance from turning one path into hundreds of rows.
   static constexpr int MAX_GAP_SPELLINGS = 8;
 
-  /// Ordinary residues required on BOTH sides of a gap.
-  ///
-  /// A gap must bridge two observed runs, which is the object worth recovering:
-  /// a series with one member missing. Without this it also fires at a tag's
-  /// end, where "2 residues + a summed pair" is mostly inference -- and those
-  /// degenerate paths are numerous. Measured at tag_length 4 with no flank
-  /// requirement: gapped tags were 92.5% of output and evicted 73% of the
-  /// contiguous tags through the per-spectrum cap, which is precisely the
-  /// wrong trade for a sensitive prefilter.
-  ///
-  /// At 2 this makes tag_length 6 the shortest gapped tag (2 + gap + 2).
-  static constexpr int MIN_GAP_FLANK = 2;
+  // There is deliberately no minimum-flank rule for gaps.
+  //
+  // An earlier version demanded ordinary residues on both sides, so a gap would
+  // bridge two observed runs rather than dangle off a tag's end. Its evidence
+  // was that at tag_length 4 an unconstrained gap made 92.5% of output gapped
+  // and evicted 73% of contiguous tags through the per-spectrum cap. That
+  // measured the wrong quantity -- tags evicted, not peptides recovered.
+  // Measured against SAGE ground truth at tag_length 6, counting spectra that
+  // gain a correctly placed tag:
+  //
+  //   flank 0: 3479 -> 5035  (+44.7%, 1700 rescued / 144 lost, 11.8:1)
+  //   flank 1: 3479 -> 4422  (+27.1%, 1060 / 117)
+  //   flank 2: 3479 -> 3954  (+13.7%,  527 /  52, 10.1:1)
+  //   flank 3: no gap fits at this length; identical to gaps off
+  //
+  // Monotonic, and the rescue-to-loss ratio is no worse unconstrained. Every
+  // unit of the rule cost recall, and the eviction it guarded against is the cap
+  // correctly discarding near-noise -- the contiguous tags it drops are ~0.6%
+  // accurate against 6.2% for the gapped ones replacing them.
+  //
+  // The constraint that matters already exists: a gap spends 2 of tag_length's
+  // residue budget, so a longer tag necessarily observes more of what it spells
+  // -- at tag_length 6 a gapped tag still rests on 4 observed residues. A short
+  // tag_length with gaps gives a high inferred fraction, and that is the
+  // caller's trade rather than something to hard-code here.
 
   namespace
   {
@@ -684,7 +697,6 @@ namespace FasTag
         peaks.clear(); path.clear();
         int n_res = 0;
         bool gap_used = false;
-        int gap_at = -1;      ///< residues preceding the gap, -1 if none taken
         peaks.push_back(start);
         st.push_back({start, 0});
         // Pop the deepest step, undoing exactly what pushing it did. At most one
@@ -694,20 +706,13 @@ namespace FasTag
           const Step sp = path.back();
           path.pop_back(); peaks.pop_back();
           n_res -= stepResidues(sp);
-          if (sp.gap) { gap_used = false; gap_at = -1; }
+          if (sp.gap) gap_used = false;
         };
 
         while (!st.empty())
         {
           if (n_res == p.tag_length)
           {
-            // A gap needs observed runs on both sides. The leading flank was
-            // enforced when the edge was taken; this is the trailing one.
-            if (gap_at >= 0 && p.tag_length - gap_at - 2 < MIN_GAP_FLANK)
-            {
-              pop_step(); st.pop_back();
-              continue;
-            }
             std::vector<uint32_t> pk = peaks;
             std::vector<Step> rs = path;
             int grew = 0;
@@ -747,11 +752,10 @@ namespace FasTag
             // One gap per tag, and it must fit the remaining residue budget --
             // otherwise a gap taken at length-1 would overshoot to length+1 and
             // silently return tags longer than asked for.
-            if (gap_used || n_res + 2 > p.tag_length || n_res < MIN_GAP_FLANK) continue;
+            if (gap_used || n_res + 2 > p.tag_length) continue;
             const uint32_t e = g.goff[node] + (ei - nn);
             peaks.push_back(g.gdst[e]);
             path.push_back(Step{g.gpair[e], 0, true, false});
-            gap_at = n_res;
             n_res += 2;
             gap_used = true;
             st.push_back({g.gdst[e], 0});
