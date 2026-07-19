@@ -31,6 +31,9 @@ not already require. There is no vendored third-party source in this repository.
 
 | Component | Why not from a library |
 |---|---|
+| χ² and hypergeometric tails | Kept as **boost**, not moved to OpenMS: OpenMS has no chi-square survival function, no incomplete gamma and no hypergeometric anywhere (searched; its only `chi_squared` hits are regression residuals). Boost computes the *upper* tail directly rather than as `1 − cdf`, which is what matters when tags live at p ~ 1e-10. |
+| Tolerance half-width (`tolAt`) | Not `Math::getTolWindow`: that returns asymmetric absolute bounds, deliberately widened so the relation between two *measured* values is symmetric. FasTag compares a *computed* target against a measured peak — a different relation, for which the symmetric half-width is correct. |
+| Monte-Carlo RNG | Not `Math::RandomShuffler`: it is a shuffler over `boost::mt19937_64` with no variate generation, and exists only because `std::random_shuffle` was not portable. A seeded `std::mt19937` already gives the reproducibility that matters. |
 | Rank-sum null (`ranksum.h`) | Neither OpenMS nor Boost has the exact null of a sum of *distinct* ranks. Boost offers the normal approximation to Mann-Whitney, unusable here because the informative tags sit in the far tail. |
 | Top-N peak selection | `NLargest` uses `sortByIntensity()`, an unstable sort with no secondary key. Peaks carry integer counts, so ties at the cut are common — 23% of real spectra have one — and which peak survives would depend on the standard library's sort. Peak selection provably drives tag output, so FasTag uses a total order (intensity desc, m/z desc). |
 | Spectrum graph, tag enumeration, scoring, extension | The algorithm itself. `OpenMS::Tagger` enumerates tags but returns bare strings with no scoring and no flanking masses, and expands I/L during recursion, which costs 2^k tags. |
