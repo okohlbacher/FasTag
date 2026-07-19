@@ -103,11 +103,19 @@ namespace FasTag
     // sum of squared deviations of k uniform errors about their own mean.
     // Sampled, with an explicit seed -- DirecTag leaves this unseeded, so two of
     // its runs disagree with each other.
+    //
+    // Sampled in UNITS OF THE TOLERANCE, on [-1, 1], and the observed SSE is
+    // divided by tol^2 before lookup. Sampling on [-frag_tol, frag_tol] instead
+    // is wrong whenever the tolerance is in ppm: frag_tol is then 20, so the null
+    // spans +-20 Da while observed deviations are ~1e-4 Da. Every tag lands below
+    // the whole null, mzFidelityP returns its floor, and one of the three Fisher
+    // subscores becomes a constant -- contributing nothing. Working in tolerance
+    // units also makes one null valid at every m/z.
     mz_null_.resize(static_cast<size_t>(k_max_ - k_min_ + 1));
     for (int k = k_min_; k <= k_max_; ++k)
     {
       std::mt19937 rng(p.seed + static_cast<unsigned>(k) * 2654435761u);
-      std::uniform_real_distribution<double> err(-p.frag_tol, p.frag_tol);
+      std::uniform_real_distribution<double> err(-1.0, 1.0);
       auto& v = mz_null_[static_cast<size_t>(k - k_min_)];
       v.reserve(static_cast<size_t>(p.mzfidelity_samples));
       std::vector<double> e(static_cast<size_t>(k));
@@ -286,7 +294,10 @@ namespace FasTag
       const double avg = std::accumulate(est.begin(), est.end(), 0.0) / k;
       double sse = 0;
       for (double e : est) { const double d = e - avg; sse += d * d; }
-      t.p_mzfidelity = tab.mzFidelityP(k, sse);
+      // Express the deviation in tolerance units, so the null is scale-free and
+      // one table serves every m/z and both tolerance modes.
+      const double tol = tolAt(p, avg);
+      t.p_mzfidelity = tab.mzFidelityP(k, tol > 0 ? sse / (tol * tol) : sse);
 
       int ranksum = 0, n_compl = 0;
       for (int i = 0; i < k; ++i)
