@@ -12,12 +12,14 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
+#include <OpenMS/KERNEL/OnDiscMSExperiment.h>
 
 #include "FasTagger.h"
 #include "FastaFilter.h"
 
 #include <fstream>
 #include <map>
+#include <memory>
 #include <vector>
 
 #ifdef _OPENMP
@@ -170,15 +172,39 @@ protected:
       }
     }
 
+    // Stream from disk rather than loading the run into memory.
+    //
+    // loadExperiment() reads the whole file into a PeakMap first: measured at
+    // 7.1 GB peak RSS for a 5.3 GB mzML, with most of the wall time spent in that
+    // single-threaded load. OnDiscMSExperiment reads one spectrum at a time from
+    // an indexed mzML, so memory becomes O(threads) instead of O(file).
+    //
+    // It is documented as NOT thread-safe -- it holds an open stream -- so each
+    // worker gets its own copy, exactly as the class comment prescribes. Falls
+    // back to a full load when the file carries no index, since random access is
+    // then impossible.
+    OnDiscMSExperiment ondisc;
     PeakMap exp;
-    FileHandler().loadExperiment(in, exp, {FileTypes::MZML});
+    const bool streaming = ondisc.openFile(in);
+    if (!streaming)
+    {
+      OPENMS_LOG_WARN << "'" << in << "' has no usable index; reading it entirely "
+                         "into memory. Run FileConverter to write an indexed mzML "
+                         "if the file is large." << std::endl;
+      FileHandler().loadExperiment(in, exp, {FileTypes::MZML});
+    }
+    const size_t n_total = streaming ? ondisc.getNrSpectra() : exp.size();
 
     const FasTag::Tables tables(p);
     std::ofstream tsv(out.c_str());
     tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tevalue\tfasta_hit\n";
 
     PeakMap kept;
-    kept.getExperimentalSettings() = exp.getExperimentalSettings();
+    if (streaming)
+    {
+      if (auto meta = ondisc.getMetaData()) kept.getExperimentalSettings() = *meta;
+    }
+    else kept.getExperimentalSettings() = exp.getExperimentalSettings();
 
     size_t n_ms2 = 0, n_tags = 0, n_reported = 0;
     std::map<int, std::pair<size_t, size_t>> by_len;   // length -> (seen, matched)
@@ -189,19 +215,30 @@ protected:
     //
     // Results are collected into a per-spectrum vector and written afterwards in
     // input order, so the output is identical whatever -threads is set to.
-    const SignedSize n_spec = static_cast<SignedSize>(exp.size());
-    std::vector<std::string> rows(exp.size());
-    std::vector<char> keep(exp.size(), 0);
+    const SignedSize n_spec = static_cast<SignedSize>(n_total);
+    std::vector<std::string> rows(n_total);
+    std::vector<char> keep(n_total, 0);
+    std::vector<MSSpectrum> kept_spec(out_spectra.empty() ? 0 : n_total);
     std::vector<std::map<int, std::pair<size_t, size_t>>> per_thread_len(
         static_cast<size_t>(std::max(1, omp_get_max_threads())));
     std::vector<size_t> per_thread_ms2(per_thread_len.size(), 0),
                         per_thread_tags(per_thread_len.size(), 0),
                         per_thread_rep(per_thread_len.size(), 0);
 
-#pragma omp parallel for schedule(dynamic, 64)
+#pragma omp parallel
+    {
+      // One reader per thread: OnDiscMSExperiment keeps an open stream and is
+      // documented as not thread-safe.
+      // Copy-constructed, not assigned: OnDiscMSExperiment's operator= is private.
+      std::unique_ptr<OnDiscMSExperiment> reader;
+      if (streaming) reader = std::make_unique<OnDiscMSExperiment>(ondisc);
+
+#pragma omp for schedule(dynamic, 64)
     for (SignedSize i = 0; i < n_spec; ++i)
     {
-      const auto& spec = exp[static_cast<Size>(i)];
+      const MSSpectrum loaded = streaming ? reader->getSpectrum(static_cast<Size>(i))
+                                          : MSSpectrum();
+      const MSSpectrum& spec = streaming ? loaded : exp[static_cast<Size>(i)];
       if (spec.getMSLevel() != 2 || spec.empty() || spec.getPrecursors().empty()) continue;
       const size_t tid = static_cast<size_t>(omp_get_thread_num());
       ++per_thread_ms2[tid];
@@ -239,7 +276,13 @@ protected:
                                     t.extended ? 1 : 0, t.evalue, hit);
         if (m > 0) buf.append(line, static_cast<size_t>(m));
       }
-      if (!buf.empty()) { rows[static_cast<size_t>(i)].swap(buf); keep[static_cast<size_t>(i)] = 1; }
+      if (!buf.empty())
+      {
+        rows[static_cast<size_t>(i)].swap(buf);
+        keep[static_cast<size_t>(i)] = 1;
+        if (!out_spectra.empty()) kept_spec[static_cast<size_t>(i)] = spec;
+      }
+    }
     }
 
     for (size_t t = 0; t < per_thread_len.size(); ++t)
@@ -257,7 +300,7 @@ protected:
     {
       if (!keep[i]) continue;
       tsv << rows[i];
-      if (!out_spectra.empty()) kept.addSpectrum(exp[i]);
+      if (!out_spectra.empty()) kept.addSpectrum(kept_spec[i]);
     }
     tsv.close();
 
