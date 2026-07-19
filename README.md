@@ -98,6 +98,27 @@ FasTag -in run.mzML -out tags.tsv -fasta AGXT.fasta -out_spectra hits.mzML
 One row per tag: sequence, length, fragment charge, N- and C-terminal flanking
 masses, whether it was extended, its E-value, and which orientation matched.
 
+## Performance, and an honest caveat
+
+Full S23 run — 632,677 MS2 spectra from a 5.3 GB mzML, OpenMS 3.5.0, EPYC 7763:
+
+| | wall | peak RSS |
+|---|---|---|
+| 1 thread | 3:20 | 6.2 GB |
+| 64 threads | **1:04** | 7.1 GB |
+
+**Memory scales with file size, not with the work.** `FileHandler::loadExperiment`
+reads the entire run into a `PeakMap` before tagging starts, so a 5.3 GB mzML
+costs ~7 GB of RAM and most of the wall time is that single-threaded load rather
+than tagging. An earlier prototype with a bespoke streaming reader did the same
+file in ~10 s at bounded memory.
+
+That is the price of using OpenMS's I/O instead of a private parser, and it is
+mostly recoverable: OpenMS provides `OnDiscMSExperiment` for streaming access,
+which would bound memory and let the load overlap with tagging. Not yet done.
+For files that fit comfortably in RAM the current behaviour is fine; for very
+large runs, be aware of it.
+
 ## Validation
 
 On 717,924 timsTOF pseudo-DDA spectra, with matched parameters against the
