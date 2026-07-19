@@ -18,6 +18,14 @@
 
 #include <fstream>
 #include <map>
+#include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#else
+static inline int omp_get_max_threads() { return 1; }
+static inline int omp_get_thread_num() { return 0; }
+#endif
 
 using namespace OpenMS;
 
@@ -162,35 +170,74 @@ protected:
     size_t n_ms2 = 0, n_tags = 0, n_reported = 0;
     std::map<int, std::pair<size_t, size_t>> by_len;   // length -> (seen, matched)
 
-    for (const auto& spec : exp)
+    // Parallel over spectra, which is the only safe level: each spectrum is
+    // independent, `tables` and `filt` are immutable once built, and per-spectrum
+    // work is ~60 us -- far too little to amortise a fork/join inside the tagger.
+    //
+    // Results are collected into a per-spectrum vector and written afterwards in
+    // input order, so the output is identical whatever -threads is set to.
+    const SignedSize n_spec = static_cast<SignedSize>(exp.size());
+    std::vector<std::string> rows(exp.size());
+    std::vector<char> keep(exp.size(), 0);
+    std::vector<std::map<int, std::pair<size_t, size_t>>> per_thread_len(
+        static_cast<size_t>(std::max(1, omp_get_max_threads())));
+    std::vector<size_t> per_thread_ms2(per_thread_len.size(), 0),
+                        per_thread_tags(per_thread_len.size(), 0),
+                        per_thread_rep(per_thread_len.size(), 0);
+
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize i = 0; i < n_spec; ++i)
     {
+      const auto& spec = exp[static_cast<Size>(i)];
       if (spec.getMSLevel() != 2 || spec.empty() || spec.getPrecursors().empty()) continue;
-      ++n_ms2;
+      const size_t tid = static_cast<size_t>(omp_get_thread_num());
+      ++per_thread_ms2[tid];
+
       const auto& prec = spec.getPrecursors().front();
       const auto tags = FasTag::tagSpectrum(spec, prec.getMZ(), prec.getCharge(), p, tables);
-      n_tags += tags.size();
+      per_thread_tags[tid] += tags.size();
 
-      bool any = false;
+      std::string buf;
       for (const auto& t : tags)
       {
         const char* hit = "-";
         if (filtering)
         {
-          ++by_len[static_cast<int>(t.seq.size())].first;
+          ++per_thread_len[tid][static_cast<int>(t.seq.size())].first;
           const auto h = filt.match(t.seq);
           if (h == FasTag::FastaFilter::Hit::None) continue;
-          ++by_len[static_cast<int>(t.seq.size())].second;
+          ++per_thread_len[tid][static_cast<int>(t.seq.size())].second;
           // A reverse-only match identifies the ion series: the tag was read off
           // the b series, so its flanking masses carry a one-water offset.
           hit = (h == FasTag::FastaFilter::Hit::Forward) ? "fwd" : "rev";
         }
-        any = true;
-        ++n_reported;
-        tsv << spec.getNativeID() << '\t' << t.seq << '\t' << t.seq.size() << '\t' << t.charge
-            << '\t' << t.nterm_mass << '\t' << t.cterm_mass << '\t' << (t.extended ? 1 : 0)
-            << '\t' << t.evalue << '\t' << hit << '\n';
+        ++per_thread_rep[tid];
+        char line[512];
+        const int m = std::snprintf(line, sizeof line, "%s\t%s\t%zu\t%d\t%g\t%g\t%d\t%g\t%s\n",
+                                    spec.getNativeID().c_str(), t.seq.c_str(), t.seq.size(),
+                                    t.charge, t.nterm_mass, t.cterm_mass,
+                                    t.extended ? 1 : 0, t.evalue, hit);
+        if (m > 0) buf.append(line, static_cast<size_t>(m));
       }
-      if (any && !out_spectra.empty()) kept.addSpectrum(spec);
+      if (!buf.empty()) { rows[static_cast<size_t>(i)].swap(buf); keep[static_cast<size_t>(i)] = 1; }
+    }
+
+    for (size_t t = 0; t < per_thread_len.size(); ++t)
+    {
+      n_ms2 += per_thread_ms2[t];
+      n_tags += per_thread_tags[t];
+      n_reported += per_thread_rep[t];
+      for (const auto& kv : per_thread_len[t])
+      {
+        by_len[kv.first].first += kv.second.first;
+        by_len[kv.first].second += kv.second.second;
+      }
+    }
+    for (size_t i = 0; i < rows.size(); ++i)
+    {
+      if (!keep[i]) continue;
+      tsv << rows[i];
+      if (!out_spectra.empty()) kept.addSpectrum(exp[i]);
     }
     tsv.close();
 
