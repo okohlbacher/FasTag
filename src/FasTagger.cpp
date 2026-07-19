@@ -120,7 +120,7 @@ namespace FasTag
       uint16_t pair = 0;   ///< index into pairs().e when gap
       uint8_t  res = 0;    ///< index into residues() otherwise
       bool     gap = false;
-      bool     swap = false;  ///< gap only: which of the pair was traversed first
+      bool     swap = false;  ///< gap only: which arrangement of the pair to spell
     };
 
     inline double stepMass(const Step& st)
@@ -133,10 +133,9 @@ namespace FasTag
     /// Spell a path N->C.
     ///
     /// Traversal runs low->high m/z, which is C->N under the y assumption, so the
-    /// path is walked backwards -- and a gap step must be reversed WITHIN itself
-    /// too, since its two residues were traversed in order. Getting that wrong
-    /// transposes exactly two residues, which no mass check can catch because the
-    /// pair sum is identical either way.
+    /// path is walked backwards. That reversal is real and matters for ordinary
+    /// steps. A gap's two residues are never observed separately, so they have no
+    /// order to preserve -- emit() spells both arrangements instead of guessing.
     std::string spell(const std::vector<Step>& path)
     {
       const auto& R = residues();
@@ -147,8 +146,10 @@ namespace FasTag
         const Step& st = path[static_cast<size_t>(i)];
         if (!st.gap) { out.push_back(R.code[st.res]); continue; }
         const auto& pe = pairs().e[st.pair];
-        // swap selects which residue was traversed first; reversing then puts
-        // the other one first in the stored direction.
+        // Neither residue in a gap is observed, so there is no traversal order
+        // to preserve: swap simply selects one of the two arrangements, and
+        // emit() produces both. Ordinary steps above are the ones whose order is
+        // real and must be reversed.
         out.push_back(R.code[st.swap ? pe.a : pe.b]);
         out.push_back(R.code[st.swap ? pe.b : pe.a]);
       }
@@ -181,8 +182,15 @@ namespace FasTag
 
   // ---------------------------------------------------------------- Tables
 
+  // A gap spends one fewer peak than it spells residues, so the realised peak
+  // count runs from tag_length + 1 - max_gaps upward. Without the -max_gaps term
+  // every gapped tag falls BELOW the table and scores as if it had no intensity
+  // evidence at all: intensityP() returns 1.0 outside its range and
+  // mzFidelityP() clamps to the nearest built k, so one subscore is switched off
+  // and another reads the wrong null -- silently, on ~86% of the output. Same
+  // failure class as the ppm null bug, reached from a different direction.
   Tables::Tables(const Param& p)
-    : k_min_(std::max(2, p.tag_length + 1)),
+    : k_min_(std::max(2, p.tag_length + 1 - std::max(0, p.max_gaps))),
       k_max_(std::max(2, p.tag_length + 1 + 2 * std::max(0, p.max_extension))),
       n_max_(p.max_peak_count > 0 ? p.max_peak_count : PEAK_CEILING)
   {
@@ -595,7 +603,7 @@ namespace FasTag
     /// n_seeds counts emitted TAGS, not paths, so the E-value's multiple-testing
     /// factor stays honest when one path spells several.
     void emit(std::vector<Tag>& out, size_t& n_seeds, Tag t, const Prepared& s,
-              const Param& p, const std::vector<uint32_t>& peaks,
+              const Param& p, const Tables& tab, const std::vector<uint32_t>& peaks,
               const std::vector<Step>& path, int charge)
     {
       if (!t.gapped) { ++n_seeds; out.push_back(std::move(t)); return; }
@@ -607,24 +615,36 @@ namespace FasTag
       const double d = (s.spec[peaks[gi + 1]].getMZ() - s.spec[peaks[gi]].getMZ()) * charge;
       const double tol = tolAt(p, s.spec[peaks[gi + 1]].getMZ()) * charge;
 
-      // Score and flanks come from the matched pair and are shared by every
-      // spelling. Alternatives differ by less than the tolerance the tag was
-      // found at, so refitting per spelling would assert precision the data does
-      // not carry.
+      // Each spelling is rescored against ITS OWN pair mass rather than
+      // inheriting the best match's flanks.
+      //
+      // Sharing them looks harmless -- alternatives sit within the tolerance --
+      // but it breaks the row's internal arithmetic: nterm + mass(seq) + cterm
+      // must equal the precursor residue mass, and with another composition's
+      // mass it misses by their difference. A consumer that checks that identity,
+      // or uses the flank as a precursor constraint, would see rows contradicting
+      // their own sequence. The alternative masses are exact numbers, so
+      // recomputing asserts no precision the data lacks; it is arithmetic
+      // consistency, and it costs one rescore of a path a few peaks long.
       const auto& P = pairs().e;
       std::vector<Step> alt(path);
       int emitted = 0;
       for (auto it = std::lower_bound(P.begin(), P.end(), d - tol,
                [](const PairTable::Entry& x, double v) { return x.mass < v; });
-           it != P.end() && it->mass <= d + tol && emitted < MAX_GAP_SPELLINGS; ++it)
+           it != P.end() && it->mass <= d + tol; ++it)
       {
-        alt[gi].pair = static_cast<uint16_t>(it - P.begin());
         const int orders = (it->a == it->b) ? 1 : 2;
-        for (int o = 0; o < orders && emitted < MAX_GAP_SPELLINGS; ++o)
+        // Admit a composition only if BOTH its orders fit the budget. Stopping
+        // part-way through one would emit a single arbitrary order and silently
+        // drop the other, which is the one case where the caller could end up
+        // with only the wrong spelling of a correct composition.
+        if (emitted + orders > MAX_GAP_SPELLINGS) break;
+        alt[gi].pair = static_cast<uint16_t>(it - P.begin());
+        for (int o = 0; o < orders; ++o)
         {
           alt[gi].swap = (o == 1);
-          Tag v = t;
-          v.seq = spell(alt);
+          Tag v = scorePath(s, p, tab, peaks, alt, charge);
+          v.extended = t.extended;
           ++n_seeds;
           out.push_back(std::move(v));
           ++emitted;
@@ -698,7 +718,7 @@ namespace FasTag
             // describe an extended tag, and the per-length nulls are already built.
             Tag t = scorePath(s, p, tables, pk, rs, z);
             t.extended = grew > 0;
-            emit(scored, n_seeds, std::move(t), s, p, pk, rs, z);
+            emit(scored, n_seeds, std::move(t), s, p, tables, pk, rs, z);
             pop_step(); st.pop_back();
             continue;
           }

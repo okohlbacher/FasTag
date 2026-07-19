@@ -6,6 +6,7 @@
 #include <OpenMS/CHEMISTRY/AASequence.h>
 #include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
+#include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 
@@ -238,6 +239,52 @@ int main()
                 "(%zu tags without gaps)\n"
                 "   negative control: %d would fail if two residues were swapped\n",
                 gapped_correct, gapped_total, without.size(), would_catch);
+  }
+
+  // 8. every emitted row must close on its own mass
+  //
+  //    nterm + mass(seq) + cterm == precursor residue mass, for EVERY row.
+  //
+  // This is the check that catches a whole class at once. It held by
+  // construction while one path produced one tag, which is why an earlier
+  // version of this file asserted it and proved nothing. With gaps a path spells
+  // several sequences, and giving them all the flanks of the best-matching
+  // composition breaks closure by the difference between compositions -- rows
+  // that contradict their own sequence, which is exactly what a downstream
+  // search consumes as a precursor constraint. Now that each spelling is
+  // rescored against its own pair mass the identity is restored, and it is worth
+  // asserting precisely because it is no longer automatic.
+  {
+    const std::string pep = "VGAHAGEYGAEALER";
+    FasTag::Param p;
+    p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
+    p.tag_length = 6; p.max_gaps = 1; p.max_tag_count = 0;
+    const FasTag::Tables tab(p);
+    double pmz = 0;
+    const MSSpectrum s = synth(pep, 20, 11, pmz);
+    const auto tags = FasTag::tagSpectrum(s, pmz, 2, p, tab);
+
+    const double prec_res = pmz * 2 - 2 * Constants::PROTON_MASS_U
+                          - EmpiricalFormula("H2O").getMonoWeight();
+    int checked = 0, closed = 0, gapped = 0;
+    double worst = 0;
+    for (const auto& t : tags)
+    {
+      double m = 0;
+      for (char c : t.seq)
+        m += ResidueDB::getInstance()->getResidue(String(c))->getMonoWeight(Residue::Internal);
+      const double err = std::fabs(t.nterm_mass + m + t.cterm_mass - prec_res);
+      ++checked; worst = std::max(worst, err);
+      if (err < 0.05) ++closed;
+      if (t.gapped) ++gapped;
+    }
+    CHECK(checked > 0, "no tags to check closure on");
+    CHECK(gapped > 0, "no gapped tag in the closure check, so it proves nothing");
+    CHECK(closed == checked, "%d/%d rows do not close on their own mass "
+          "(worst %.4f Da) -- a spelling is carrying another composition's flanks",
+          closed, checked, worst);
+    std::printf("8. mass closure: %d/%d rows satisfy nterm+seq+cterm == precursor "
+                "(%d gapped, worst %.5f Da)\n", closed, checked, gapped, worst);
   }
 
   std::printf(failures ? "\n%d FAILURES\n" : "\nall checks passed\n", failures);
