@@ -4,7 +4,8 @@ Partial sequence tags from peptide MS/MS spectra — a reimplementation of the
 [DirecTag](https://doi.org/10.1021/pr800154p) algorithm (Tabb et al.,
 *J. Proteome Res.* 2008, 7:3838) as an [OpenMS](https://www.openms.de) TOPP tool.
 
-Requires **OpenMS 3.5** or newer. Built and verified against OpenMS 3.5.0.
+Requires **OpenMS 3.5** or newer. Built and verified against OpenMS 3.5.0
+(Linux/gcc-13) and 3.6.0 (macOS arm64/AppleClang).
 
 ## Why
 
@@ -58,6 +59,12 @@ ctest --test-dir build
 
 `CMAKE_PREFIX_PATH` must point at the same contrib tree OpenMS was built against,
 so `OpenMSConfig.cmake` can resolve Xerces-C, Boost, LIBSVM and friends.
+
+On **macOS** the build resolves curl to the SDK automatically. CMake searches
+frameworks first, so a third-party `/Library/Frameworks/libcurl.framework` would
+otherwise shadow the SDK libcurl that `libOpenMS.dylib` links, and the binary
+would die at startup with `Library not loaded: @rpath/libcurl.framework/...`.
+Override with `-DCURL_LIBRARY=...` if you need a different curl.
 
 If configuration fails with *"Could not find a configuration file for package
 Eigen3 ... compatible with requested version range 3.4.0...<6"*, you have hit a

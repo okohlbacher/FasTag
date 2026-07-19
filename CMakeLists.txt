@@ -4,6 +4,26 @@ project(FasTag VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(APPLE AND NOT DEFINED CURL_LIBRARY)
+  # Resolve curl to the macOS SDK, as OpenMS itself does.
+  #
+  # OpenMSConfig.cmake pulls in CURL transitively. CMake searches frameworks
+  # first on macOS, so a third-party /Library/Frameworks/libcurl.framework
+  # shadows the SDK libcurl that libOpenMS.dylib actually links. The resulting
+  # binary carries an @rpath reference to a framework on no rpath and dies at
+  # startup with "Library not loaded: @rpath/libcurl.framework/...".
+  #
+  # Note the SDK ships a .tbd text stub rather than a .dylib; pointing at
+  # /usr/lib/libcurl.4.dylib instead leaves CURL::libcurl undefined.
+  execute_process(COMMAND xcrun --show-sdk-path
+                  OUTPUT_VARIABLE _fastag_sdk
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(_fastag_sdk AND EXISTS "${_fastag_sdk}/usr/lib/libcurl.tbd")
+    set(CURL_LIBRARY "${_fastag_sdk}/usr/lib/libcurl.tbd" CACHE FILEPATH "curl (macOS SDK)")
+    set(CURL_INCLUDE_DIR "${_fastag_sdk}/usr/include" CACHE PATH "curl headers (macOS SDK)")
+  endif()
+endif()
+
 option(FASTAG_BUILD_TOOL  "Build the FasTag TOPP tool (requires OpenMS)" ON)
 option(FASTAG_BUILD_TESTS "Build the algorithm tests (no OpenMS needed)"  ON)
 
