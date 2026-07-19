@@ -1,0 +1,12 @@
+name: build
+on: [push, pull_request]
+jobs:
+  # FasTag requires OpenMS, which has no lightweight CI install, so this job only
+  # checks that the sources parse and the headers are self-contained. The real
+  # gate is `ctest` against a local OpenMS build -- see README.
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: syntax-only check of the dependency-free header
+        run: g++ -std=c++17 -fsyntax-only -Iinclude include/FasTag/ranksum.h

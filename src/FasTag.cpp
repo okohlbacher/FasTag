@@ -1,5 +1,5 @@
-// Copyright (c) 2026, Oliver Kohlbacher and contributors
-// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2026 Oliver Kohlbacher and contributors
+// SPDX-License-Identifier: MIT
 //
 // --------------------------------------------------------------------------
 // $Maintainer: Oliver Kohlbacher $
@@ -9,15 +9,15 @@
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
-#include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
-#include <OpenMS/FORMAT/MzMLFile.h>
+#include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 
-#include <FasTag/fastag.h>
-#include <FasTag/fasta_filter.h>
+#include "FasTagger.h"
+#include "FastaFilter.h"
 
 #include <fstream>
+#include <map>
 
 using namespace OpenMS;
 
@@ -27,15 +27,12 @@ using namespace OpenMS;
 
   @brief Infers partial sequence tags from MS/MS spectra.
 
-  FasTag reimplements the DirecTag algorithm (Tabb et al., J Proteome Res 2008,
-  7:3838) with three changes that matter:
-
-  - the intensity rank-sum null is computed by dynamic programming rather than by
-    enumerating every C(n, k) subset of peak ranks, which is what makes tag
-    lengths above 4 reachable at all (2.1e12 subsets at length 7);
-  - a seed tag can be extended, so the configured length is a minimum;
-  - reported tags can be restricted to exact (optionally isobaric) substrings of
-    supplied sequences, and the matching spectra written to a filtered mzML.
+  Reimplements DirecTag (Tabb et al., J Proteome Res 2008, 7:3838) with three
+  differences: the intensity null is computed by dynamic programming instead of
+  by enumerating every C(n,k) subset of peak ranks, which is what makes tag
+  lengths above four reachable; a seed tag can be extended, so the configured
+  length is a minimum; and reported tags can be restricted to sequences supplied
+  as FASTA, with the carrying spectra written out as mzML.
 
   <B>The command line parameters of this tool are:</B>
   @verbinclude TOPP_FasTag.cli
@@ -45,11 +42,10 @@ using namespace OpenMS;
 class TOPPFasTag : public TOPPBase
 {
 public:
+  // official = false: FasTag lives outside the OpenMS tree and so is not in
+  // ToolHandler's list. Passing true makes the TOPPBase constructor throw
+  // InvalidValue on startup.
   TOPPFasTag()
-    // `official = false`: FasTag lives outside the OpenMS tree, so it is not in
-    // ToolHandler's list of official TOPP tools. Passing true makes the TOPPBase
-    // constructor throw InvalidValue on startup. Everything else -- INI files,
-    // -write_ini, standard parameters, logging -- is unaffected.
     : TOPPBase("FasTag", "Infers partial sequence tags from MS/MS spectra.", false,
                {{"Tabb DL, Ma ZQ, Martin DB, Ham AJ, Chambers MC",
                  "DirecTag: accurate sequence tags from peptide MS/MS through statistical scoring",
@@ -62,13 +58,11 @@ protected:
   {
     registerInputFile_("in", "<file>", "", "Input spectra");
     setValidFormats_("in", ListUtils::create<String>("mzML"));
-
     registerOutputFile_("out", "<file>", "", "Tag list (tab-separated)");
     setValidFormats_("out", ListUtils::create<String>("tsv"));
 
-    registerInputFile_("fasta", "<file>", "", "Report only tags that occur in these sequences", false);
+    registerInputFile_("fasta", "<file>", "", "Report only tags occurring in these sequences", false);
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
-
     registerOutputFile_("out_spectra", "<file>", "",
                         "Write spectra carrying a reported tag to this mzML", false);
     setValidFormats_("out_spectra", ListUtils::create<String>("mzML"));
@@ -80,26 +74,23 @@ protected:
     setMinInt_("extension", 0);
 
     registerDoubleOption_("fragment_tolerance", "<value>", 20.0, "Fragment mass tolerance", false);
-    registerStringOption_("fragment_tolerance_unit", "<unit>", "ppm", "Unit of the fragment tolerance",
-                          false);
+    registerStringOption_("fragment_tolerance_unit", "<unit>", "ppm", "Tolerance unit", false);
     setValidStrings_("fragment_tolerance_unit", ListUtils::create<String>("ppm,Da"));
 
     registerIntOption_("max_peaks", "<n>", 100, "Peaks retained per spectrum", false);
-    registerIntOption_("max_tags", "<n>", 50, "Tags reported per spectrum", false);
-    registerDoubleOption_("max_evalue", "<value>", 20.0,
-                          "Discard tags above this E-value; 0 disables", false);
+    registerIntOption_("max_tags", "<n>", 50, "Tags reported per spectrum; 0 = unlimited", false);
+    registerDoubleOption_("max_evalue", "<value>", 20.0, "E-value cutoff; 0 disables", false);
 
     registerDoubleOption_("isobaric_tolerance", "<value>", 0.04,
-                          "Treat a residue as interchangeable with an isobaric residue pair "
-                          "within this tolerance when matching against 'fasta'; 0 requires "
+                          "When matching against 'fasta', treat a residue as interchangeable "
+                          "with an isobaric residue pair within this tolerance; 0 requires "
                           "exact strings", false);
     registerIntOption_("min_filter_length", "<n>", 0,
                        "Ignore tags shorter than this when matching against 'fasta'; "
                        "0 derives a floor from the database size", false);
     registerStringOption_("orientation", "<mode>", "both",
                           "Match a tag as written, or also reversed. Tags are stored N->C under a "
-                          "y-ion assumption, so b-derived tags read reversed relative to the "
-                          "sequence", false);
+                          "y-ion assumption, so b-derived tags read reversed", false);
     setValidStrings_("orientation", ListUtils::create<String>("both,forward"));
   }
 
@@ -110,77 +101,58 @@ protected:
     const String fasta = getStringOption_("fasta");
     const String out_spectra = getStringOption_("out_spectra");
 
-    fastag::Param p;
+    FasTag::Param p;
     p.tag_length = getIntOption_("tag_length");
     p.max_extension = getIntOption_("extension");
     p.frag_tol = getDoubleOption_("fragment_tolerance");
     p.tol_ppm = getStringOption_("fragment_tolerance_unit") == "ppm";
     p.max_peak_count = static_cast<size_t>(getIntOption_("max_peaks"));
     p.max_tag_count = getIntOption_("max_tags");
-    p.max_tag_score = getDoubleOption_("max_evalue");
+    p.max_evalue = getDoubleOption_("max_evalue");
 
     const int max_len = p.tag_length + 2 * p.max_extension;
-    if (!fasta.empty() && max_len > fastag::MAX_FILTER_LEN)
+    if (!fasta.empty() && max_len > FasTag::MAX_FILTER_LEN)
     {
-      OPENMS_LOG_ERROR << "Realised tag length can reach " << max_len
-                       << ", beyond the filter's " << fastag::MAX_FILTER_LEN
-                       << "-residue encoding." << std::endl;
+      OPENMS_LOG_ERROR << "Realised tag length can reach " << max_len << ", beyond the filter's "
+                       << FasTag::MAX_FILTER_LEN << "-residue encoding." << std::endl;
       return ILLEGAL_PARAMETERS;
     }
 
-    //-------------------------------------------------------------
-    // sequence filter
-    //-------------------------------------------------------------
-    fastag::FastaFilter filt(getStringOption_("orientation") == "both");
+    FasTag::FastaFilter filt(getStringOption_("orientation") == "both");
     const bool filtering = !fasta.empty();
     if (filtering)
     {
-      // Read via OpenMS so we accept whatever FASTAFile accepts, then hand the
-      // plain sequences to the filter.
       std::vector<FASTAFile::FASTAEntry> entries;
       FASTAFile().load(fasta, entries);
-      if (entries.empty())
-      {
-        OPENMS_LOG_ERROR << "No sequences in " << fasta << std::endl;
-        return INPUT_FILE_EMPTY;
-      }
-      std::vector<std::string> seqs;
-      seqs.reserve(entries.size());
-      for (const auto& e : entries) seqs.push_back(std::string(e.sequence));
       std::string err;
-      if (!filt.loadSequences(seqs, &err))
+      if (!filt.load(entries, &err))
       {
-        OPENMS_LOG_ERROR << err << std::endl;
-        return INPUT_FILE_CORRUPT;
+        OPENMS_LOG_ERROR << "FASTA: " << err << std::endl;
+        return INPUT_FILE_EMPTY;
       }
       const int floor_ = getIntOption_("min_filter_length");
       if (floor_ > 0) filt.setMinLen(floor_);
       const double iso = getDoubleOption_("isobaric_tolerance");
       if (iso > 0) filt.deriveCollapses(iso);
-      filt.finalise();
-      filt.buildRange(p.tag_length, max_len);
+      filt.build(p.tag_length, max_len);
 
-      OPENMS_LOG_INFO << "Filter: " << filt.stats().sequences << " sequences, "
-                      << filt.stats().residues << " residues; minimum tag length "
-                      << filt.minLen()
-                      << (filt.stats().min_len_auto ? " (derived)" : " (set)") << std::endl;
-      if (!filt.stats().min_len_auto && filt.minLen() < filt.autoMinLen())
+      OPENMS_LOG_INFO << "Filter: " << filt.sequenceCount() << " sequences, "
+                      << filt.residueCount() << " residues; minimum tag length " << filt.minLen()
+                      << (filt.minLenAuto() ? " (derived)" : " (set)")
+                      << "; " << filt.collapseRules() << " isobaric rules" << std::endl;
+      if (!filt.minLenAuto() && filt.minLen() < filt.autoMinLen())
       {
         OPENMS_LOG_WARN << "min_filter_length " << filt.minLen() << " is below the derived floor "
-                        << filt.autoMinLen() << "; about "
-                        << 100 * filt.chanceRate(filt.minLen())
-                        << "% of random tags of that length occur in this database by chance."
+                        << filt.autoMinLen() << "; about " << 100 * filt.chanceRate(filt.minLen())
+                        << "% of random tags that length occur in this database by chance."
                         << std::endl;
       }
     }
 
-    //-------------------------------------------------------------
-    // tagging
-    //-------------------------------------------------------------
     PeakMap exp;
     FileHandler().loadExperiment(in, exp, {FileTypes::MZML});
 
-    const fastag::Tables tables(p);
+    const FasTag::Tables tables(p);
     std::ofstream tsv(out.c_str());
     tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tevalue\tfasta_hit\n";
 
@@ -188,23 +160,14 @@ protected:
     kept.getExperimentalSettings() = exp.getExperimentalSettings();
 
     size_t n_ms2 = 0, n_tags = 0, n_reported = 0;
+    std::map<int, std::pair<size_t, size_t>> by_len;   // length -> (seen, matched)
+
     for (const auto& spec : exp)
     {
       if (spec.getMSLevel() != 2 || spec.empty() || spec.getPrecursors().empty()) continue;
       ++n_ms2;
-
-      std::vector<double> mz, intensity;
-      mz.reserve(spec.size());
-      intensity.reserve(spec.size());
-      for (const auto& peak : spec)
-      {
-        mz.push_back(peak.getMZ());
-        intensity.push_back(peak.getIntensity());
-      }
       const auto& prec = spec.getPrecursors().front();
-      const int z = prec.getCharge() > 0 ? prec.getCharge() : 2;
-
-      const auto tags = fastag::tagSpectrum(mz, intensity, prec.getMZ(), z, p, tables);
+      const auto tags = FasTag::tagSpectrum(spec, prec.getMZ(), prec.getCharge(), p, tables);
       n_tags += tags.size();
 
       bool any = false;
@@ -213,17 +176,19 @@ protected:
         const char* hit = "-";
         if (filtering)
         {
+          ++by_len[static_cast<int>(t.seq.size())].first;
           const auto h = filt.match(t.seq);
-          if (h == fastag::FastaFilter::Hit::None) continue;
+          if (h == FasTag::FastaFilter::Hit::None) continue;
+          ++by_len[static_cast<int>(t.seq.size())].second;
           // A reverse-only match identifies the ion series: the tag was read off
           // the b series, so its flanking masses carry a one-water offset.
-          hit = (h == fastag::FastaFilter::Hit::Forward) ? "fwd" : "rev";
+          hit = (h == FasTag::FastaFilter::Hit::Forward) ? "fwd" : "rev";
         }
         any = true;
         ++n_reported;
-        tsv << spec.getNativeID() << '\t' << t.seq << '\t' << t.seq.size() << '\t'
-            << t.charge << '\t' << t.nterm_mass << '\t' << t.cterm_mass << '\t'
-            << (t.extended ? 1 : 0) << '\t' << t.evalue << '\t' << hit << '\n';
+        tsv << spec.getNativeID() << '\t' << t.seq << '\t' << t.seq.size() << '\t' << t.charge
+            << '\t' << t.nterm_mass << '\t' << t.cterm_mass << '\t' << (t.extended ? 1 : 0)
+            << '\t' << t.evalue << '\t' << hit << '\n';
       }
       if (any && !out_spectra.empty()) kept.addSpectrum(spec);
     }
@@ -232,6 +197,33 @@ protected:
     OPENMS_LOG_INFO << n_ms2 << " MS2 spectra, " << n_tags << " tags";
     if (filtering) OPENMS_LOG_INFO << " -> " << n_reported << " after filtering";
     OPENMS_LOG_INFO << std::endl;
+
+    // Report matches beside the number expected by chance, so a count is never
+    // mistaken for signal: below the derived floor the filter passes almost
+    // everything.
+    if (filtering && !by_len.empty())
+    {
+      char line[160];
+      std::snprintf(line, sizeof line, "%5s %12s %12s %12s %10s",
+                    "len", "tags", "matched", "by chance", "enrichment");
+      OPENMS_LOG_INFO << line << std::endl;
+      for (const auto& kv : by_len)
+      {
+        const size_t seen = kv.second.first, hit = kv.second.second;
+        if (seen == 0) continue;
+        const double expect = filt.chanceRate(kv.first) * static_cast<double>(seen);
+        // Only a length that actually matched something can be uninformative;
+        // zero matches is simply no evidence either way.
+        const char* note = "";
+        if (hit > 0 && static_cast<double>(hit) <= 2.0 * expect) note = "  <- at chance";
+        char enr[24] = "-";
+        if (hit > 0) std::snprintf(enr, sizeof enr, "%.1fx",
+                                   expect > 0 ? hit / expect : 999.0);
+        std::snprintf(line, sizeof line, "%5d %12zu %12zu %12zu %10s%s",
+                      kv.first, seen, hit, static_cast<size_t>(expect + 0.5), enr, note);
+        OPENMS_LOG_INFO << line << std::endl;
+      }
+    }
 
     if (!out_spectra.empty())
     {
