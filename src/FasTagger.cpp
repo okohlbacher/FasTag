@@ -27,6 +27,24 @@ namespace FasTag
   /// intensity subscore rather than erroring.
   static constexpr size_t PEAK_CEILING = 1024;
 
+  /// Cap on spellings emitted for one gap. At the tolerances this tool is used
+  /// at the real count is 1 composition x 2 orders; the cap only stops a
+  /// pathologically wide tolerance from turning one path into hundreds of rows.
+  static constexpr int MAX_GAP_SPELLINGS = 8;
+
+  /// Ordinary residues required on BOTH sides of a gap.
+  ///
+  /// A gap must bridge two observed runs, which is the object worth recovering:
+  /// a series with one member missing. Without this it also fires at a tag's
+  /// end, where "2 residues + a summed pair" is mostly inference -- and those
+  /// degenerate paths are numerous. Measured at tag_length 4 with no flank
+  /// requirement: gapped tags were 92.5% of output and evicted 73% of the
+  /// contiguous tags through the per-spectrum cap, which is precisely the
+  /// wrong trade for a sensitive prefilter.
+  ///
+  /// At 2 this makes tag_length 6 the shortest gapped tag (2 + gap + 2).
+  static constexpr int MIN_GAP_FLANK = 2;
+
   namespace
   {
     /// Residue masses from OpenMS, not a hardcoded table.
@@ -64,6 +82,77 @@ namespace FasTag
     {
       static const ResidueTable t;
       return t;
+    }
+
+    /// Sums of two residues, for bridging exactly one missing peak.
+    ///
+    /// 190 unordered pairs over the 19 residues. One-residue gaps are not here
+    /// because an ordinary edge already is one. Three-residue sums are
+    /// deliberately not offered either: 1330 entries packed into the same mass
+    /// range match a random difference 40-60% of the time above 300 Da, so such
+    /// an edge asserts almost nothing while doubling the branching again.
+    struct PairTable
+    {
+      struct Entry { double mass; uint8_t a, b; };
+      std::vector<Entry> e;
+
+      PairTable()
+      {
+        const auto& R = residues();
+        for (uint8_t i = 0; i < R.mass.size(); ++i)
+          for (uint8_t j = i; j < R.mass.size(); ++j)
+            e.push_back({R.mass[i] + R.mass[j], i, j});
+        std::sort(e.begin(), e.end(),
+                  [](const Entry& x, const Entry& y) { return x.mass < y.mass; });
+      }
+    };
+
+    const PairTable& pairs()
+    {
+      static const PairTable t;
+      return t;
+    }
+
+    /// One traversal step: an ordinary edge carries one residue, a gap edge
+    /// carries a two-residue sum whose split is not observed.
+    struct Step
+    {
+      uint16_t pair = 0;   ///< index into pairs().e when gap
+      uint8_t  res = 0;    ///< index into residues() otherwise
+      bool     gap = false;
+      bool     swap = false;  ///< gap only: which of the pair was traversed first
+    };
+
+    inline double stepMass(const Step& st)
+    {
+      return st.gap ? pairs().e[st.pair].mass : residues().mass[st.res];
+    }
+
+    inline int stepResidues(const Step& st) { return st.gap ? 2 : 1; }
+
+    /// Spell a path N->C.
+    ///
+    /// Traversal runs low->high m/z, which is C->N under the y assumption, so the
+    /// path is walked backwards -- and a gap step must be reversed WITHIN itself
+    /// too, since its two residues were traversed in order. Getting that wrong
+    /// transposes exactly two residues, which no mass check can catch because the
+    /// pair sum is identical either way.
+    std::string spell(const std::vector<Step>& path)
+    {
+      const auto& R = residues();
+      std::string out;
+      out.reserve(path.size() + 1);
+      for (int i = static_cast<int>(path.size()) - 1; i >= 0; --i)
+      {
+        const Step& st = path[static_cast<size_t>(i)];
+        if (!st.gap) { out.push_back(R.code[st.res]); continue; }
+        const auto& pe = pairs().e[st.pair];
+        // swap selects which residue was traversed first; reversing then puts
+        // the other one first in the stored direction.
+        out.push_back(R.code[st.swap ? pe.a : pe.b]);
+        out.push_back(R.code[st.swap ? pe.b : pe.a]);
+      }
+      return out;
     }
 
     const double WATER = EmpiricalFormula("H2O").getMonoWeight();
@@ -280,6 +369,8 @@ namespace FasTag
       std::vector<uint8_t>  res;
       std::vector<uint32_t> roff, rsrc; ///< reverse edges, so C-terminal
       std::vector<uint8_t>  rres;       ///< extension is O(degree) too
+      std::vector<uint32_t> goff, gdst; ///< gap edges, empty unless max_gaps > 0
+      std::vector<uint16_t> gpair;      ///< matched entry in pairs().e
     };
 
     Graph buildGraph(const Prepared& s, const Param& p, int charge)
@@ -310,11 +401,49 @@ namespace FasTag
         for (const auto& e : adj[i]) { g.dst.push_back(e.first); g.res.push_back(e.second); }
       for (size_t i = 0; i < n; ++i)
         for (const auto& e : radj[i]) { g.rsrc.push_back(e.first); g.rres.push_back(e.second); }
+
+      // Gap edges: peak pairs separated by a two-residue sum, i.e. a series with
+      // one member missing. Built by walking peak pairs and binary-searching the
+      // sorted table -- n^2/2 = 5k searches at the 100-peak cap, against the
+      // n * 190 = 19k findNearest calls the per-residue construction above would
+      // need. Peaks are m/z sorted, so the inner loop stops as soon as the
+      // difference exceeds the heaviest pair.
+      if (p.max_gaps > 0 && n > 1)
+      {
+        const auto& P = pairs().e;
+        const double p_lo = P.front().mass, p_hi = P.back().mass;
+        std::vector<std::vector<std::pair<uint32_t, uint16_t>>> gadj(n);
+        for (size_t i = 0; i < n; ++i)
+          for (size_t j = i + 1; j < n; ++j)
+          {
+            const double d = (s.spec[j].getMZ() - s.spec[i].getMZ()) * charge;
+            const double tol = tolAt(p, s.spec[j].getMZ()) * charge;
+            if (d + tol < p_lo) continue;
+            if (d - tol > p_hi) break;
+            int best = -1; double best_err = tol;
+            for (auto it = std::lower_bound(P.begin(), P.end(), d - tol,
+                     [](const PairTable::Entry& x, double v) { return x.mass < v; });
+                 it != P.end() && it->mass <= d + tol; ++it)
+            {
+              const double err = std::fabs(it->mass - d);
+              if (err < best_err) { best_err = err; best = static_cast<int>(it - P.begin()); }
+            }
+            if (best >= 0)
+              gadj[i].emplace_back(static_cast<uint32_t>(j), static_cast<uint16_t>(best));
+          }
+        g.goff.assign(n + 1, 0);
+        uint32_t gt = 0;
+        for (size_t i = 0; i < n; ++i) { g.goff[i] = gt; gt += gadj[i].size(); }
+        g.goff[n] = gt;
+        g.gdst.reserve(gt); g.gpair.reserve(gt);
+        for (size_t i = 0; i < n; ++i)
+          for (const auto& e : gadj[i]) { g.gdst.push_back(e.first); g.gpair.push_back(e.second); }
+      }
       return g;
     }
 
     Tag scorePath(const Prepared& s, const Param& p, const Tables& tab,
-                  const std::vector<uint32_t>& peaks, const std::vector<uint8_t>& res,
+                  const std::vector<uint32_t>& peaks, const std::vector<Step>& path,
                   int charge)
     {
       const auto& R = residues();
@@ -324,12 +453,18 @@ namespace FasTag
 
       // Back-project every peak onto an estimate of the first peak's position.
       // The spread of those estimates is the m/z-fidelity statistic.
+      //
+      // A gap step advances by its matched two-residue sum, so the statistic
+      // keeps measuring how well the observed peaks fit ideal masses. Every null
+      // stays valid because Tables is keyed on PEAK count, not residue count: a
+      // gapped tag spends the same number of peaks and draws the same null, it
+      // just spells more residues with them.
       std::vector<double> est(static_cast<size_t>(k));
       double cum = 0;
       est[0] = s.spec[peaks[0]].getMZ();
       for (int i = 0; i < k - 1; ++i)
       {
-        cum += R.mass[res[static_cast<size_t>(i)]] / charge;
+        cum += stepMass(path[static_cast<size_t>(i)]) / charge;
         est[static_cast<size_t>(i) + 1] = s.spec[peaks[static_cast<size_t>(i) + 1]].getMZ() - cum;
       }
       const double avg = std::accumulate(est.begin(), est.end(), 0.0) / k;
@@ -381,9 +516,13 @@ namespace FasTag
       t.cterm_mass = std::max(0.0, avg * charge - PROTON * charge - WATER);
       t.nterm_mass = std::max(0.0, s.precursor_mass - ((avg + cum) * charge - PROTON * charge));
 
-      // Traversal runs low->high m/z, which is C->N; store N->C.
-      t.seq.reserve(static_cast<size_t>(k - 1));
-      for (int i = k - 2; i >= 0; --i) t.seq.push_back(R.code[res[static_cast<size_t>(i)]]);
+      // Traversal runs low->high m/z, which is C->N; store N->C. So the path is
+      // walked backwards -- and a gap step must be reversed WITHIN itself too:
+      // its residues are traversed a-then-b, which reads b-then-a in the stored
+      // direction. Getting this wrong transposes exactly two residues, which no
+      // mass check would catch because the pair sum is unchanged.
+      t.seq = spell(path);
+      for (const Step& st : path) if (st.gap) { t.gapped = true; break; }
       t.low_mz = s.spec[peaks.front()].getMZ();
       return t;
     }
@@ -392,8 +531,13 @@ namespace FasTag
     /// on better intensity rank, then peak index -- all three are needed, since
     /// ties at equal error are common and a partial order leaves the output
     /// dependent on traversal accidents.
+    /// Extension deliberately walks ordinary edges only, even when the seed
+    /// carries no gap. A gap here would let one tag rest on two unobserved
+    /// splits at opposite ends, and the sequence it spells would be mostly
+    /// inference; the seed-level gap already reaches the disjoint runs this is
+    /// meant to recover. Revisit only with a measurement that says it pays.
     int extendPath(const Prepared& s, const Param& p, const Graph& g,
-                   std::vector<uint32_t>& peaks, std::vector<uint8_t>& res,
+                   std::vector<uint32_t>& peaks, std::vector<Step>& path,
                    int charge, bool forward)
     {
       const auto& R = residues();
@@ -424,12 +568,69 @@ namespace FasTag
         }
         if (best < 0) break;
         used[static_cast<size_t>(best)] = true;
-        if (forward) { peaks.push_back(static_cast<uint32_t>(best)); res.push_back(best_r); }
-        else { peaks.insert(peaks.begin(), static_cast<uint32_t>(best));
-               res.insert(res.begin(), best_r); }
+        if (forward)
+        {
+          peaks.push_back(static_cast<uint32_t>(best));
+          path.push_back(Step{0, best_r, false});
+        }
+        else
+        {
+          peaks.insert(peaks.begin(), static_cast<uint32_t>(best));
+          path.insert(path.begin(), Step{0, best_r, false});
+        }
         ++added;
       }
       return added;
+    }
+
+    /// Push one scored path as one or more tags.
+    ///
+    /// A gap edge asserts a two-residue SUM, not a split, so every composition
+    /// within tolerance of the observed difference -- in both orders -- is an
+    /// equally supported reading, and all of them are emitted. Keeping only the
+    /// closest match would be wrong on a systematic class rather than a random
+    /// one: AD and GE both weigh 186.064 exactly, so the correct spelling would
+    /// be dropped about half the time whenever that gap occurs.
+    ///
+    /// n_seeds counts emitted TAGS, not paths, so the E-value's multiple-testing
+    /// factor stays honest when one path spells several.
+    void emit(std::vector<Tag>& out, size_t& n_seeds, Tag t, const Prepared& s,
+              const Param& p, const std::vector<uint32_t>& peaks,
+              const std::vector<Step>& path, int charge)
+    {
+      if (!t.gapped) { ++n_seeds; out.push_back(std::move(t)); return; }
+
+      size_t gi = 0;
+      while (gi < path.size() && !path[gi].gap) ++gi;
+      if (gi + 1 >= peaks.size()) { ++n_seeds; out.push_back(std::move(t)); return; }
+
+      const double d = (s.spec[peaks[gi + 1]].getMZ() - s.spec[peaks[gi]].getMZ()) * charge;
+      const double tol = tolAt(p, s.spec[peaks[gi + 1]].getMZ()) * charge;
+
+      // Score and flanks come from the matched pair and are shared by every
+      // spelling. Alternatives differ by less than the tolerance the tag was
+      // found at, so refitting per spelling would assert precision the data does
+      // not carry.
+      const auto& P = pairs().e;
+      std::vector<Step> alt(path);
+      int emitted = 0;
+      for (auto it = std::lower_bound(P.begin(), P.end(), d - tol,
+               [](const PairTable::Entry& x, double v) { return x.mass < v; });
+           it != P.end() && it->mass <= d + tol && emitted < MAX_GAP_SPELLINGS; ++it)
+      {
+        alt[gi].pair = static_cast<uint16_t>(it - P.begin());
+        const int orders = (it->a == it->b) ? 1 : 2;
+        for (int o = 0; o < orders && emitted < MAX_GAP_SPELLINGS; ++o)
+        {
+          alt[gi].swap = (o == 1);
+          Tag v = t;
+          v.seq = spell(alt);
+          ++n_seeds;
+          out.push_back(std::move(v));
+          ++emitted;
+        }
+      }
+      if (emitted == 0) { ++n_seeds; out.push_back(std::move(t)); }
     }
   }
 
@@ -452,23 +653,43 @@ namespace FasTag
     {
       const Graph g = buildGraph(s, p, z);
       std::vector<uint32_t> peaks;
-      std::vector<uint8_t> res;
+      std::vector<Step> path;
+      // edge is a relative index over this node's ordinary edges followed by its
+      // gap edges, so one counter walks both arrays.
       struct Frame { uint32_t node, edge; };
 
       for (uint32_t start = 0; start < s.spec.size(); ++start)
       {
         std::vector<Frame> st;
-        peaks.clear(); res.clear();
+        peaks.clear(); path.clear();
+        int n_res = 0;
+        bool gap_used = false;
+        int gap_at = -1;      ///< residues preceding the gap, -1 if none taken
         peaks.push_back(start);
-        st.push_back({start, g.off[start]});
+        st.push_back({start, 0});
+        // Pop the deepest step, undoing exactly what pushing it did. At most one
+        // gap is ever on the path, so clearing the flag on its pop is sufficient.
+        auto pop_step = [&]() {
+          if (path.empty()) return;
+          const Step sp = path.back();
+          path.pop_back(); peaks.pop_back();
+          n_res -= stepResidues(sp);
+          if (sp.gap) { gap_used = false; gap_at = -1; }
+        };
+
         while (!st.empty())
         {
-          Frame& f = st.back();
-          if (static_cast<int>(res.size()) == p.tag_length)
+          if (n_res == p.tag_length)
           {
-            ++n_seeds;
+            // A gap needs observed runs on both sides. The leading flank was
+            // enforced when the edge was taken; this is the trailing one.
+            if (gap_at >= 0 && p.tag_length - gap_at - 2 < MIN_GAP_FLANK)
+            {
+              pop_step(); st.pop_back();
+              continue;
+            }
             std::vector<uint32_t> pk = peaks;
-            std::vector<uint8_t> rs = res;
+            std::vector<Step> rs = path;
             int grew = 0;
             if (p.max_extension > 0)
               grew = extendPath(s, p, g, pk, rs, z, true)
@@ -477,21 +698,44 @@ namespace FasTag
             // describe an extended tag, and the per-length nulls are already built.
             Tag t = scorePath(s, p, tables, pk, rs, z);
             t.extended = grew > 0;
-            scored.push_back(std::move(t));
-            res.pop_back(); peaks.pop_back(); st.pop_back();
+            emit(scored, n_seeds, std::move(t), s, p, pk, rs, z);
+            pop_step(); st.pop_back();
             continue;
           }
-          if (f.edge >= g.off[f.node + 1])
+
+          const uint32_t node = st.back().node;
+          const uint32_t nn = g.off[node + 1] - g.off[node];
+          const uint32_t ng = g.goff.empty() ? 0u : g.goff[node + 1] - g.goff[node];
+          if (st.back().edge >= nn + ng)
           {
             st.pop_back();
-            if (!res.empty()) { res.pop_back(); peaks.pop_back(); }
+            pop_step();
             continue;
           }
-          const uint32_t e = f.edge++;
-          const uint32_t nxt = g.dst[e];
-          peaks.push_back(nxt);
-          res.push_back(g.res[e]);
-          st.push_back({nxt, g.off[nxt]});
+          const uint32_t ei = st.back().edge++;
+
+          if (ei < nn)
+          {
+            const uint32_t e = g.off[node] + ei;
+            peaks.push_back(g.dst[e]);
+            path.push_back(Step{0, g.res[e], false, false});
+            ++n_res;
+            st.push_back({g.dst[e], 0});
+          }
+          else
+          {
+            // One gap per tag, and it must fit the remaining residue budget --
+            // otherwise a gap taken at length-1 would overshoot to length+1 and
+            // silently return tags longer than asked for.
+            if (gap_used || n_res + 2 > p.tag_length || n_res < MIN_GAP_FLANK) continue;
+            const uint32_t e = g.goff[node] + (ei - nn);
+            peaks.push_back(g.gdst[e]);
+            path.push_back(Step{g.gpair[e], 0, true, false});
+            gap_at = n_res;
+            n_res += 2;
+            gap_used = true;
+            st.push_back({g.gdst[e], 0});
+          }
         }
       }
     }

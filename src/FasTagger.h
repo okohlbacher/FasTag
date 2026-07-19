@@ -26,6 +26,7 @@ namespace FasTag
   {
     int    tag_length     = 3;      ///< seed length in residues
     int    max_extension  = 0;      ///< residues appended per terminus; 0 = off
+    int    max_gaps       = 0;      ///< gap edges allowed per tag; 0 = off, 1 = max
     double frag_tol       = 20.0;   ///< fragment tolerance
     bool   tol_ppm        = true;
     double complement_tol = 0.02;   ///< always absolute; complements span the whole range
@@ -49,6 +50,8 @@ namespace FasTag
     double p_intensity = 1, p_mzfidelity = 1, p_complement = 1;
     double evalue = 1;          ///< combined p-value x tags enumerated
     bool   extended = false;
+    bool   gapped = false;      ///< crossed a missing peak; two residues are a
+                                ///< mass-only inference, not two observed steps
     double low_mz = 0;          ///< lowest peak; also the output tie-break
   };
 

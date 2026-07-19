@@ -179,6 +179,67 @@ int main()
     std::printf("6. empty, too-few-peaks, unknown charge and missing precursor all survive\n");
   }
 
+  // 7. a gap bridges a missing peak, and spells it in the RIGHT ORDER
+  //
+  // The ordering is the part worth testing. A gap step is reversed twice --
+  // once because traversal is C->N, once within the pair -- and getting it
+  // wrong transposes exactly two residues while leaving the pair sum, both
+  // flanking masses and every score untouched. No mass-based check can see it.
+  //
+  // Built from y ions only, so there is no b/y ambiguity to hide behind, with
+  // one interior y ion deleted. Nothing can span that hole without a gap.
+  {
+    const std::string pep = "VGAHAGEYGAEALER";
+    const AASequence aa = AASequence::fromString(pep);
+    double pmz = 0;
+    synth(pep, 0, 1, pmz);   // for the precursor m/z only
+
+    MSSpectrum y;
+    for (size_t i = 1; i < aa.size(); ++i)
+      y.emplace_back(aa.getSuffix(i).getMonoWeight(Residue::YIon, 1), 0.5 + 0.02 * i);
+    const double drop = aa.getSuffix(6).getMonoWeight(Residue::YIon, 1);
+    MSSpectrum holed;
+    for (const auto& pk : y) if (std::fabs(pk.getMZ() - drop) > 1e-6) holed.push_back(pk);
+    holed.sortByPosition();
+
+    FasTag::Param off;
+    off.frag_tol = 0.02; off.tol_ppm = false; off.complement_tol = 0.02; off.tag_length = 6;
+    FasTag::Param on = off; on.max_gaps = 1;
+    const FasTag::Tables tf(off), tn(on);
+
+    const auto without = FasTag::tagSpectrum(holed, pmz, 2, off, tf);
+    const auto with = FasTag::tagSpectrum(holed, pmz, 2, on, tn);
+
+    int gapped_correct = 0, gapped_total = 0;
+    for (const auto& t : with)
+      if (t.gapped) { ++gapped_total; if (reads(pep, t.seq)) ++gapped_correct; }
+
+    CHECK(gapped_total > 0, "no gapped tag produced across a deleted peak");
+    CHECK(gapped_correct > 0, "gapped tags produced but none reads the peptide -- "
+                              "the two residues either side of the gap are most "
+                              "likely transposed");
+
+    // The assertion above only means something if transposing the gap would
+    // actually break it. Prove the checker discriminates.
+    int would_catch = 0;
+    for (const auto& t : with)
+    {
+      if (!t.gapped || !reads(pep, t.seq)) continue;
+      for (size_t i = 0; i + 1 < t.seq.size(); ++i)
+      {
+        std::string sw = t.seq;
+        std::swap(sw[i], sw[i + 1]);
+        if (sw != t.seq && !reads(pep, sw)) { ++would_catch; break; }
+      }
+    }
+    CHECK(would_catch > 0, "reads() cannot distinguish a transposition here, so "
+                           "the ordering check above proves nothing");
+    std::printf("7. gap spans a deleted peak: %d/%d gapped tags read the peptide "
+                "(%zu tags without gaps)\n"
+                "   negative control: %d would fail if two residues were swapped\n",
+                gapped_correct, gapped_total, without.size(), would_catch);
+  }
+
   std::printf(failures ? "\n%d FAILURES\n" : "\nall checks passed\n", failures);
   return failures ? 1 : 0;
 }

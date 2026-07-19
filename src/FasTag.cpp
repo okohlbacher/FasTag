@@ -85,6 +85,14 @@ protected:
     // tag_length + 2*extension is computed as int and indexes the null tables.
     // Unbounded, --extension 1073741824 overflows and aborts with std::length_error.
     setMaxInt_("extension", (FasTag::MAX_FILTER_LEN - 1) / 2);
+    registerIntOption_("gaps", "<n>", 0,
+                       "Allow a tag to cross one missing peak, spelling the two "
+                       "residues either side of it from their summed mass; "
+                       "0 disables", false);
+    setMinInt_("gaps", 0);
+    // One gap only. Each additional gap multiplies the branching and asserts
+    // another unobserved split, and a two-gap tag would be mostly inference.
+    setMaxInt_("gaps", 1);
 
     registerDoubleOption_("fragment_tolerance", "<value>", 20.0, "Fragment mass tolerance", false);
     // Without a floor a negative or zero tolerance matches nothing and the run
@@ -124,6 +132,7 @@ protected:
     FasTag::Param p;
     p.tag_length = getIntOption_("tag_length");
     p.max_extension = getIntOption_("extension");
+    p.max_gaps = getIntOption_("gaps");
     p.frag_tol = getDoubleOption_("fragment_tolerance");
     p.tol_ppm = getStringOption_("fragment_tolerance_unit") == "ppm";
     p.max_peak_count = static_cast<size_t>(getIntOption_("max_peaks"));
@@ -183,6 +192,19 @@ protected:
     // worker gets its own copy, exactly as the class comment prescribes. Falls
     // back to a full load when the file carries no index, since random access is
     // then impossible.
+    // The metadata pass is NOT skippable, though it dominates the run.
+    //
+    // openFile() calls loadMetaData_(), a fully serial parse of every spectrum's
+    // metadata: measured at ~55 s of a 60 s run on S23, and the reason wall time
+    // stops improving past 16 threads however many cores it is given. Passing
+    // skipMetaData = true makes that vanish and the tool finish in 6 s -- with
+    // zero output. MzMLSpectrumDecoder::domParseSpectrum() into an MSSpectrum
+    // fills the binary data and the native ID and nothing else, so MS level and
+    // precursor are absent and every spectrum fails the MS2 test. Verified
+    // directly: not one MS2 spectrum is found in all 632,677.
+    //
+    // So tagging itself is a few seconds and the reader is the tool. Any real
+    // speedup has to come from a lighter metadata parse, not from more threads.
     OnDiscMSExperiment ondisc;
     PeakMap exp;
     const bool streaming = ondisc.openFile(in);
@@ -197,7 +219,7 @@ protected:
 
     const FasTag::Tables tables(p);
     std::ofstream tsv(out.c_str());
-    tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tevalue\tfasta_hit\n";
+    tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tgapped\tevalue\tfasta_hit\n";
 
     PeakMap kept;
     if (streaming)
@@ -270,10 +292,11 @@ protected:
         // tolerance the tag was found with, and these are precisely the values a
         // downstream search uses as a precursor constraint. E-values keep %g,
         // where relative precision is what matters.
-        const int m = std::snprintf(line, sizeof line, "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%g\t%s\n",
+        const int m = std::snprintf(line, sizeof line,
+                                    "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\t%g\t%s\n",
                                     spec.getNativeID().c_str(), t.seq.c_str(), t.seq.size(),
                                     t.charge, t.nterm_mass, t.cterm_mass,
-                                    t.extended ? 1 : 0, t.evalue, hit);
+                                    t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue, hit);
         if (m > 0) buf.append(line, static_cast<size_t>(m));
       }
       if (!buf.empty())
