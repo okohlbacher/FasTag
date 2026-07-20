@@ -30,7 +30,44 @@ find_package(OpenMS REQUIRED)
 if(OpenMS_VERSION VERSION_LESS 3.5)
   message(FATAL_ERROR "FasTag needs OpenMS >= 3.5 (found ${OpenMS_VERSION}).")
 endif()
-message(STATUS "FasTag: using OpenMS ${OpenMS_VERSION}")
+message(STATUS "FasTag: using OpenMS ${OpenMS_VERSION} (${OpenMS_DIR})")
+
+# Report at configure time which reader path this OpenMS will allow.
+#
+# Stock OpenMS parses every spectrum's metadata serially in openFile() before
+# tagging starts -- ~55 s of a 60 s run on a 5 GB file, and the reason wall time
+# stops improving past 16 threads. FasTag skips that pass when the OpenMS it
+# links can report MS level and precursor from the spectrum block itself, which
+# needs a patch to MzMLSpectrumDecoder (see doc/OPENMS-FAST-READER.md).
+#
+# FasTag detects this at RUNTIME too and falls back with a warning, so an
+# unpatched OpenMS is correct, merely slow. This check exists so that is known
+# when the build is configured rather than discovered from a log much later.
+set(_fastag_fast_reader OFF)
+get_target_property(_openms_inc OpenMS INTERFACE_INCLUDE_DIRECTORIES)
+if(_openms_inc)
+  foreach(_d IN LISTS _openms_inc)
+    string(GENEX_STRIP "${_d}" _d)
+    if(_d AND EXISTS "${_d}/OpenMS/FORMAT/HANDLERS/MzMLSpectrumDecoder.h")
+      file(READ "${_d}/OpenMS/FORMAT/HANDLERS/MzMLSpectrumDecoder.h" _hdr)
+      string(FIND "${_hdr}" "handleSpectrumMetadata_" _found)
+      if(NOT _found EQUAL -1)
+        set(_fastag_fast_reader ON)
+      endif()
+      break()
+    endif()
+  endforeach()
+endif()
+
+if(_fastag_fast_reader)
+  message(STATUS "FasTag: fast reader available -- this OpenMS reports "
+                 "per-spectrum metadata")
+else()
+  message(STATUS "FasTag: fast reader NOT available -- this OpenMS parses all "
+                 "metadata up front. Correct, but expect roughly a minute of "
+                 "extra single-threaded startup per large file, and no scaling "
+                 "past ~16 threads. See doc/OPENMS-FAST-READER.md.")
+endif()
 
 add_library(fastag_core STATIC src/FasTagger.cpp src/FastaFilter.cpp)
 target_include_directories(fastag_core PUBLIC
