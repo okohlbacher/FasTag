@@ -392,6 +392,8 @@ namespace FasTag
       std::vector<uint8_t>  rres;       ///< extension is O(degree) too
       std::vector<uint32_t> goff, gdst; ///< gap edges, empty unless max_gaps > 0
       std::vector<uint16_t> gpair;      ///< matched entry in pairs().e
+      std::vector<uint32_t> groff, grsrc;  ///< reverse gap edges, for N-ward extension
+      std::vector<uint16_t> grpair;
     };
 
     Graph buildGraph(const Prepared& s, const Param& p, int charge)
@@ -459,6 +461,19 @@ namespace FasTag
         g.gdst.reserve(gt); g.gpair.reserve(gt);
         for (size_t i = 0; i < n; ++i)
           for (const auto& e : gadj[i]) { g.gdst.push_back(e.first); g.gpair.push_back(e.second); }
+
+        // Reverse gap edges, so a tag can cross a hole walking N-ward too.
+        std::vector<std::vector<std::pair<uint32_t, uint16_t>>> gradj(n);
+        for (size_t i = 0; i < n; ++i)
+          for (const auto& e : gadj[i])
+            gradj[e.first].emplace_back(static_cast<uint32_t>(i), e.second);
+        g.groff.assign(n + 1, 0);
+        uint32_t grt = 0;
+        for (size_t i = 0; i < n; ++i) { g.groff[i] = grt; grt += gradj[i].size(); }
+        g.groff[n] = grt;
+        g.grsrc.reserve(grt); g.grpair.reserve(grt);
+        for (size_t i = 0; i < n; ++i)
+          for (const auto& e : gradj[i]) { g.grsrc.push_back(e.first); g.grpair.push_back(e.second); }
       }
       return g;
     }
@@ -495,6 +510,33 @@ namespace FasTag
       // one table serves every m/z and both tolerance modes.
       const double tol = tolAt(p, avg);
       t.p_mzfidelity = tab.mzFidelityP(k, tol > 0 ? sse / (tol * tol) : sse);
+
+      // Price the search a gap edge represents.
+      //
+      // An ordinary edge tests one residue mass and either finds a peak or does
+      // not. A gap edge tests the WHOLE pair table and keeps whichever entry fits
+      // best, so its contribution is a minimum over candidates rather than a free
+      // draw -- and mzFidelityP's null is built for a free draw. Not theoretical:
+      // enabling gaps moved rank-1 recall from 2836 spectra to 1676, a 41% loss,
+      // because gapped tags displaced correct contiguous ones from the top of the
+      // ranking while adding correct ones further down.
+      //
+      // Corrected by the order statistic for the best of m independent draws,
+      // p -> 1 - (1-p)^m, with m the number of candidates the edge searched.
+      // Exact only because gaps are restricted to two residues: the table is a
+      // fixed 190 entries, so m is a known constant. Three-residue gaps would be
+      // 1330 entries with strongly mass-dependent local density, and no closed
+      // form would be honest there.
+      //
+      // log1p/expm1 rather than the direct form: at m=190 and p~1e-6 the naive
+      // expression loses every significant digit.
+      int n_gap = 0;
+      for (const Step& st : path) if (st.gap) ++n_gap;
+      if (n_gap > 0)
+      {
+        const double m = std::pow(static_cast<double>(pairs().e.size()), n_gap);
+        t.p_mzfidelity = -std::expm1(m * std::log1p(-t.p_mzfidelity));
+      }
 
       int ranksum = 0, n_compl = 0;
       for (int i = 0; i < k; ++i)
@@ -552,14 +594,20 @@ namespace FasTag
     /// on better intensity rank, then peak index -- all three are needed, since
     /// ties at equal error are common and a partial order leaves the output
     /// dependent on traversal accidents.
-    /// Extension deliberately walks ordinary edges only, even when the seed
-    /// carries no gap. A gap here would let one tag rest on two unobserved
-    /// splits at opposite ends, and the sequence it spells would be mostly
-    /// inference; the seed-level gap already reaches the disjoint runs this is
-    /// meant to recover. Revisit only with a measurement that says it pays.
+    /// Extend one terminus, optionally crossing a hole.
+    ///
+    /// A gap edge is tried ONLY when no ordinary edge continues the walk. That
+    /// is what makes it a bridge rather than a competitor: while the series is
+    /// intact the ordinary edge always wins, and the gap fires exactly where the
+    /// series breaks. It also keeps the gapped tag a strict superset of the
+    /// contiguous one it grew from, which is what lets subsumption collapse the
+    /// two into one.
+    ///
+    /// @param gap_used shared across both termini, so max_gaps bounds the whole
+    ///   tag rather than each end separately.
     int extendPath(const Prepared& s, const Param& p, const Graph& g,
                    std::vector<uint32_t>& peaks, std::vector<Step>& path,
-                   int charge, bool forward)
+                   int charge, bool forward, bool& gap_used)
     {
       const auto& R = residues();
       int added = 0;
