@@ -7,6 +7,7 @@
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CONCEPT/Constants.h>
+#include <OpenMS/PROCESSING/DEISOTOPING/Deisotoper.h>
 
 #include <boost/math/distributions/chi_squared.hpp>
 #include <boost/math/distributions/hypergeometric.hpp>
@@ -337,6 +338,33 @@ namespace FasTag
         work.clear(false);
         for (const auto& pk : uniq) work.push_back(pk);
       }
+
+      // Optional: collapse isotope clusters before anything competes for the
+      // peak budget.
+      //
+      // diaTracer emits exactly 500 peaks per spectrum, so the cap is active on
+      // every real spectrum and every isotope peak spends a slot a monoisotopic
+      // peak could have had. make_single_charged additionally moves +2 and +3
+      // fragments onto the +1 scale, putting a whole series into one coordinate
+      // system instead of splitting it across the per-charge graphs.
+      //
+      // keep_only_deisotoped stays false deliberately: it drops every peak that
+      // failed to form a cluster, and a real fragment whose isotopes fell under
+      // the noise floor is exactly what a sensitive prefilter must keep. Peak
+      // count is left to the cap below, hence number_of_final_peaks = 0.
+      if (p.deisotope && work.size() > 2)
+      {
+        Deisotoper::deisotopeWithAveragineModel(
+            work, p.frag_tol, p.tol_ppm,
+            0,                                        // no peak cap here
+            1, std::max(1, p.deisotope_max_charge),
+            false,                                    // keep_only_deisotoped
+            2, 10,                                    // min/max isopeaks
+            true,                                     // make_single_charged
+            false, false, false);
+        work.sortByPosition();
+      }
+
       std::vector<size_t> order(work.size());
       std::iota(order.begin(), order.end(), 0);
       std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {

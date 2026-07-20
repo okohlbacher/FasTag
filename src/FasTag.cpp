@@ -90,6 +90,10 @@ protected:
                        "residues either side of it from their summed mass; "
                        "0 disables", false);
     setMinInt_("gaps", 0);
+    registerFlag_("deisotope",
+                  "Collapse isotope clusters to their monoisotopic peak and move "
+                  "multiply-charged fragments onto the singly-charged scale before "
+                  "peak selection", false);
     // One gap only. Each additional gap multiplies the branching and asserts
     // another unobserved split, and a two-gap tag would be mostly inference.
     setMaxInt_("gaps", 1);
@@ -133,6 +137,7 @@ protected:
     p.tag_length = getIntOption_("tag_length");
     p.max_extension = getIntOption_("extension");
     p.max_gaps = getIntOption_("gaps");
+    p.deisotope = getFlag_("deisotope");
     p.frag_tol = getDoubleOption_("fragment_tolerance");
     p.tol_ppm = getStringOption_("fragment_tolerance_unit") == "ppm";
     p.max_peak_count = static_cast<size_t>(getIntOption_("max_peaks"));

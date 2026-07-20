@@ -27,6 +27,10 @@ namespace FasTag
     int    tag_length     = 3;      ///< seed length in residues
     int    max_extension  = 0;      ///< residues appended per terminus; 0 = off
     int    max_gaps       = 0;      ///< gap edges allowed per tag; 0 = off, 1 = max
+    /// Collapse isotope clusters to their monoisotopic peak before selecting
+    /// peaks, and move multiply-charged fragments onto the singly-charged scale.
+    bool   deisotope      = false;
+    int    deisotope_max_charge = 3;
     double frag_tol       = 20.0;   ///< fragment tolerance
     bool   tol_ppm        = true;
     double complement_tol = 0.02;   ///< always absolute; complements span the whole range
