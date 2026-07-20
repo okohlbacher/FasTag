@@ -192,28 +192,55 @@ protected:
     // worker gets its own copy, exactly as the class comment prescribes. Falls
     // back to a full load when the file carries no index, since random access is
     // then impossible.
-    // The metadata pass is NOT skippable, though it dominates the run.
+    // Skip the up-front metadata pass; each worker reads its own spectrum's
+    // metadata from the block it already parses.
     //
-    // openFile() calls loadMetaData_(), a fully serial parse of every spectrum's
-    // metadata: measured at ~55 s of a 60 s run on S23, and the reason wall time
-    // stops improving past 16 threads however many cores it is given. Passing
-    // skipMetaData = true makes that vanish and the tool finish in 6 s -- with
-    // zero output. MzMLSpectrumDecoder::domParseSpectrum() into an MSSpectrum
-    // fills the binary data and the native ID and nothing else, so MS level and
-    // precursor are absent and every spectrum fails the MS2 test. Verified
-    // directly: not one MS2 spectrum is found in all 632,677.
+    // openFile() otherwise calls loadMetaData_(), a fully serial parse of every
+    // spectrum's metadata before any work starts -- ~55 s of a 60 s run on S23,
+    // and the reason wall time stopped improving past 16 threads however many
+    // cores it was given.
     //
-    // So tagging itself is a few seconds and the reader is the tool. Any real
-    // speedup has to come from a lighter metadata parse, not from more threads.
+    // REQUIRES a patched OpenMS. Stock MzMLSpectrumDecoder::domParseSpectrum()
+    // fills the binary data and native ID only, so with skipMetaData every
+    // spectrum has MS level 0 and no precursor and the run silently returns
+    // nothing. The patch harvests MS level, RT and precursors from the DOM that
+    // function already builds; verified identical to the canonical parser across
+    // all 632,677 spectra of S23. Guarded below rather than assumed.
+    //
+    // -out_spectra still needs getMetaData() for the run-level settings, so that
+    // path keeps the full load.
     OnDiscMSExperiment ondisc;
     PeakMap exp;
-    const bool streaming = ondisc.openFile(in);
+    const bool streaming = ondisc.openFile(in, out_spectra.empty());
     if (!streaming)
     {
       OPENMS_LOG_WARN << "'" << in << "' has no usable index; reading it entirely "
                          "into memory. Run FileConverter to write an indexed mzML "
                          "if the file is large." << std::endl;
       FileHandler().loadExperiment(in, exp, {FileTypes::MZML});
+    }
+    // Refuse to run blind on an unpatched OpenMS.
+    //
+    // Without the patch every spectrum comes back with MS level 0 and no
+    // precursor, so the MS2 test rejects all of them and the tool reports a
+    // clean run with an empty output file. That is the worst possible failure --
+    // indistinguishable from a file that genuinely holds no MS2 -- so probe for
+    // it and take the slow path instead of producing a confident nothing.
+    if (streaming && out_spectra.empty())
+    {
+      bool have_meta = false;
+      const Size probe = std::min<Size>(ondisc.getNrSpectra(), 64);
+      for (Size i = 0; i < probe && !have_meta; ++i)
+        if (ondisc.getSpectrum(i).getMSLevel() > 0) have_meta = true;
+      if (!have_meta && probe > 0)
+      {
+        OPENMS_LOG_WARN << "This OpenMS does not report spectrum metadata from the "
+                           "per-spectrum reader, so the fast path is unavailable; "
+                           "loading metadata up front instead. Expect roughly a "
+                           "minute of extra single-threaded startup on a large file."
+                        << std::endl;
+        ondisc.openFile(in);
+      }
     }
     const size_t n_total = streaming ? ondisc.getNrSpectra() : exp.size();
 
