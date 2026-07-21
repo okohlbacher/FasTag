@@ -73,10 +73,24 @@ jobs:
       - name: Configure
         shell: bash -el {0}
         run: |
+          # Eigen3 needs the shim this repo already ships.
+          #
+          # OpenMSConfig.cmake does find_dependency(Eigen3 3.4.0...<6). Eigen 3.4's
+          # own config-version file enforces same-major-version and rejects any
+          # range whose maximum crosses 4, so a perfectly good Eigen 3.4.0 is
+          # refused and configuration dies before OpenMS's fallback can run. It is
+          # the first thing CI hit, on every platform.
+          #
+          # README.md documented this and cmake/eigen3-range-shim existed; the
+          # first CI attempt simply failed to use it. Passing it unconditionally
+          # is harmless where Eigen behaves, and this is exactly the sort of
+          # environment-specific breakage CI is meant to catch for new users.
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DOpenMS_DIR="$OPENMS_DIR" \
-            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DEigen3_DIR="$PWD/cmake/eigen3-range-shim" \
+            -DEIGEN3_INCLUDE_DIR="$CONDA_PREFIX/include/eigen3"
 
       - name: Build
         shell: bash -el {0}
@@ -163,7 +177,12 @@ jobs:
           echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOpenMS_DIR="$env:OPENMS_DIR"
+        run: |
+          # Same Eigen3 range shim as the conda jobs; see the comment there.
+          cmake -S . -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DOpenMS_DIR="$env:OPENMS_DIR" `
+            -DEigen3_DIR="${{ github.workspace }}/cmake/eigen3-range-shim"
 
       - name: Build
         run: cmake --build build --config Release --parallel
