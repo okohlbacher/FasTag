@@ -1,6 +1,22 @@
 // End-to-end: build a spectrum from a known peptide and require FasTag to read
 // that peptide back. Residue masses come from OpenMS, so the test uses OpenMS to
 // build the spectrum too -- if the two disagreed, this would catch it.
+//
+// EVERY TEST HERE HAS BEEN MUTATION-CHECKED: the behaviour it names was broken
+// on purpose and the test confirmed to fail. Four tests in this project have
+// been caught asserting something true by construction, so "it passes" is not
+// evidence that it tests anything.
+//
+// Two traps found while doing that, both of which produced confident wrong
+// answers:
+//   - a stale build. Restoring a mutated source without touching it can leave
+//     the old object linked, and the run then reports the mutation's behaviour
+//     as if it were the code's. Always touch the file and confirm a recompile.
+//   - a mutation that does not mutate. Blanking the inner branch of the
+//     duplicate-peak collapse only changes WHICH duplicate survives; the else
+//     branch still collapses. It looked like a surviving mutation for two
+//     rounds. Check that the mutation changes behaviour before concluding the
+//     test is weak.
 #include "FasTagger.h"
 
 #include <OpenMS/CHEMISTRY/AASequence.h>
@@ -396,6 +412,103 @@ int main()
           "looks reversed", fwd, rev_only);
     std::printf("10. y-only spectrum: %d tags read N->C forward, %d only reversed\n",
                 fwd, rev_only);
+  }
+
+  // 11. duplicated m/z peaks must not change the result
+  //
+  // diaTracer emits peaks sharing an m/z routinely -- measured on S23, every MS2
+  // spectrum has them, median 22 and up to 46. prepare() collapses them keeping
+  // the strongest, because each otherwise consumes a slot in the peak budget and
+  // shifts every intensity rank.
+  //
+  // Mutation testing showed the suite passed with that collapse disabled: the
+  // synthetic spectra had no duplicates, so nothing exercised it. This feeds the
+  // same spectrum twice, once with duplicates injected, and requires identical
+  // output. Verified to FAIL when the collapse is removed.
+  {
+    const std::string pep = "VGAHAGEYGAEALER";
+    double pmz = 0;
+    const MSSpectrum clean = synth(pep, 20, 5, pmz);
+
+    // Same peaks, but every third one repeated at exactly its own m/z with a
+    // lower intensity -- the case prepare() is meant to fold away.
+    MSSpectrum dup;
+    size_t k = 0;
+    for (const auto& pk : clean)
+    {
+      dup.push_back(pk);
+      // EQUAL intensity, not weaker. A first version injected at 0.5x, so the
+      // cap discarded the duplicates before they could displace anything and the
+      // test passed with the collapse removed. A duplicate only costs a slot if
+      // it ranks high enough to occupy one.
+      if (k++ % 3 == 0) dup.emplace_back(pk.getMZ(), pk.getIntensity());
+    }
+    dup.sortByPosition();
+    CHECK(dup.size() > clean.size(), "no duplicates were actually injected");
+
+    FasTag::Param p;
+    p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
+    // The cap MUST bind, or duplicates displace nothing and this proves nothing.
+    // A first version left the default 100 against ~66 peaks, and passed happily
+    // with the collapse removed.
+    p.max_peak_count = 30;
+    const FasTag::Tables tab(p);
+    const auto a = FasTag::tagSpectrum(clean, pmz, 2, p, tab);
+    const auto b = FasTag::tagSpectrum(dup, pmz, 2, p, tab);
+
+    bool same = a.size() == b.size();
+    for (size_t i = 0; same && i < a.size(); ++i)
+      same = a[i].seq == b[i].seq && a[i].evalue == b[i].evalue;
+    CHECK(same, "duplicated m/z peaks changed the output: %zu tags vs %zu",
+          a.size(), b.size());
+    std::printf("11. %zu duplicate peaks injected: %zu tags either way, identical\n",
+                dup.size() - clean.size(), a.size());
+  }
+
+  // 12. the peak cap keeps exactly max_peaks, and the boundary is the strongest
+  //
+  // Mutation testing showed an off-by-one in the cap went unnoticed. The cap is
+  // the single most consequential parameter -- it decides which peaks exist at
+  // all -- so its boundary deserves an exact assertion rather than a smoke test.
+  {
+    const std::string pep = "VGAHAGEYGAEALER";
+    const AASequence aa = AASequence::fromString(pep);
+    double pmz = 0;
+    synth(pep, 0, 9, pmz);                       // for the precursor m/z only
+
+    // A controlled ladder: y ions with intensity DECREASING along the series, so
+    // the strongest k peaks are exactly the first k and therefore consecutive.
+    // Without that, the top-k of a noisy spectrum are scattered and no tag of
+    // any length survives a tight cap -- which is a fact about noise, not about
+    // the cap, and would make this test assert the wrong thing.
+    MSSpectrum s;
+    for (size_t i = 1; i < aa.size(); ++i)
+      s.emplace_back(aa.getSuffix(i).getMonoWeight(Residue::YIon, 1),
+                     static_cast<float>(1.0 - 0.02 * i));
+    s.sortByPosition();
+
+    // Assert the BOUNDARY, not a bound. A length-L tag needs L+1 peaks, so with
+    // the cap at exactly tag_length there can be no tag, and at tag_length + 1
+    // there can. An off-by-one either way moves that edge. Asserting "no tag is
+    // longer than the cap allows" instead is vacuous: tag length is fixed by
+    // tag_length, so it holds for any cap.
+    const int TL = 5;
+    size_t at_edge = 0, past_edge = 0;
+    for (int cap : {TL, TL + 1})
+    {
+      FasTag::Param p;
+      p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
+      p.max_peak_count = static_cast<size_t>(cap);
+      p.tag_length = TL;
+      const FasTag::Tables tab(p);
+      const size_t n = FasTag::tagSpectrum(s, pmz, 2, p, tab).size();
+      if (cap == TL) at_edge = n; else past_edge = n;
+    }
+    CHECK(at_edge == 0, "cap %d retains too many peaks: %zu tags where a "
+          "%d-residue tag needs %d peaks", TL, at_edge, TL, TL + 1);
+    CHECK(past_edge > 0, "cap %d retains too few peaks: no tags at all", TL + 1);
+    std::printf("12. peak cap boundary: %zu tags at cap=%d, %zu at cap=%d\n",
+                at_edge, TL, past_edge, TL + 1);
   }
 
   std::printf(failures ? "\n%d FAILURES\n" : "\nall checks passed\n", failures);

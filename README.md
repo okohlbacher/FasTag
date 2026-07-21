@@ -191,17 +191,19 @@ pseudo-DDA spectra:
   unique tags
 
 Against Sage ground truth (14,867 PSMs at 1% FDR), counting spectra that gain a
-correctly placed tag. **These were measured before the scoring fixes in 0.4.0**
-(the complement population was pooled across fragment charges, and a peak could
-be its own complement); they are the right order of magnitude but have not been
-re-run:
+correctly placed tag. Re-measured on 0.4.0, after the scoring fixes:
 
-| | spectra | vs baseline |
-|---|---|---|
-| default | 3,479 | — |
-| `-deisotope` | 4,142 | +19.1% |
-| `-gaps 1` | 5,035 | +44.7% |
-| both | **5,974** | **+71.7%** |
+| | spectra | vs baseline | correct tags |
+|---|---|---|---|
+| default | 3,480 | — | 8,054 (7.4%) |
+| `-deisotope` | 4,142 | +19.0% | 12,683 (10.6%) |
+| `-gaps 1` | 5,055 | +45.3% | 33,236 (7.1%) |
+| both | **5,976** | **+71.7%** | 45,919 (8.9%) |
+
+The scoring fixes moved recall by at most 0.4% (3,479 → 3,480 at baseline,
+5,035 → 5,055 with gaps), so the earlier figures were sound. They did change
+per-tag correctness where gaps are on -- 6.2% → 7.1% -- because a peak can no
+longer be its own complement.
 
 Sanity-checked on four datasets spanning two vendors, three instruments, DDA and
 DIA-derived input, and 163-1,435 peaks per spectrum: Bruker timsTOF (diaTracer
