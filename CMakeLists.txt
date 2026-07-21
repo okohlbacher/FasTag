@@ -78,12 +78,23 @@ endif()
 #
 # Detected by header presence rather than version, because there is no version to
 # test against while the API is pre-1.0.
+# Requires BOTH the MzPeakFile header and a MZPEAK member in the FileTypes enum.
+#
+# Those are not the same thing. bioconda's OpenMS ships MzPeakFile.h while its
+# FileTypes enum has no MZPEAK, so detecting only the header enabled code that
+# then failed to compile on every CI platform. Detect what the code actually
+# uses.
 set(_fastag_mzpeak OFF)
 if(_openms_inc)
   foreach(_d IN LISTS _openms_inc)
     string(GENEX_STRIP "${_d}" _d)
-    if(_d AND EXISTS "${_d}/OpenMS/FORMAT/MzPeakFile.h")
-      set(_fastag_mzpeak ON)
+    if(_d AND EXISTS "${_d}/OpenMS/FORMAT/MzPeakFile.h"
+          AND EXISTS "${_d}/OpenMS/FORMAT/FileTypes.h")
+      file(READ "${_d}/OpenMS/FORMAT/FileTypes.h" _ft)
+      string(FIND "${_ft}" "MZPEAK" _has_enum)
+      if(NOT _has_enum EQUAL -1)
+        set(_fastag_mzpeak ON)
+      endif()
       break()
     endif()
   endforeach()

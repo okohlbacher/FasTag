@@ -303,16 +303,17 @@ protected:
     // path keeps the full load.
     // mzPeak is read through its own push-based path, so none of the mzML
     // reader setup below applies to it.
+    // FileTypes::MZPEAK is referenced only under the guard.
+    //
+    // An OpenMS can ship MzPeakFile.h while its FileTypes enum has no MZPEAK
+    // member -- bioconda's build is exactly that -- so detecting the header is
+    // not sufficient to know the enum exists. CI caught this: the reference sat
+    // outside the #ifdef and failed to compile on every platform, which is the
+    // one thing the compile-time gate was supposed to prevent.
+#ifdef FASTAG_HAVE_MZPEAK
     const bool mzpeak_in = FileHandler::getType(in) == FileTypes::MZPEAK;
-#ifndef FASTAG_HAVE_MZPEAK
-    if (mzpeak_in)
-    {
-      OPENMS_LOG_ERROR << "'" << in << "' is mzPeak, but this FasTag was built "
-                          "against an OpenMS without MzPeakFile. Rebuild against "
-                          "an OpenMS that provides it, or convert to mzML."
-                       << std::endl;
-      return ILLEGAL_PARAMETERS;
-    }
+#else
+    const bool mzpeak_in = false;
 #endif
     if (mzpeak_in && !out_spectra.empty())
     {
