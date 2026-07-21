@@ -31,14 +31,14 @@ namespace FasTag
     }
   }
 
-  __uint128_t FastaFilter::encode(const char* s, int n)
+  Kmer128 FastaFilter::encode(const char* s, int n)
   {
-    __uint128_t v = 0;
+    Kmer128 v;
     for (int i = 0; i < n; ++i)
     {
       const char c = s[i];
-      if (c < 'A' || c > 'Z') return ~static_cast<__uint128_t>(0);
-      v = (v << 5) | static_cast<__uint128_t>(c - 'A');
+      if (c < 'A' || c > 'Z') return Kmer128::invalid();
+      v.push5(static_cast<uint64_t>(c - 'A'));
     }
     return v;
   }
@@ -93,7 +93,7 @@ namespace FasTag
   /// Emit every length-k reading from position i, applying collapses. Depth is k
   /// and branching at most 2 per step, but real sequences give ~1; capped anyway.
   void FastaFilter::emitReadings(const std::string& seq, size_t i, int k, std::string& cur,
-                                 std::unordered_set<__uint128_t, Kmer128Hash>& out,
+                                 std::unordered_set<Kmer128, Kmer128Hash>& out,
                                  size_t& budget) const
   {
     if (static_cast<int>(cur.size()) == k) { out.insert(encode(cur.data(), k)); return; }
@@ -119,7 +119,7 @@ namespace FasTag
   {
     // Distinct k-mers are bounded by both the residue count and the alphabet
     // space; short k saturates the alphabet, long k saturates the sequence.
-    // 48 bytes/key is measured steady-state for unordered_set<__uint128_t>.
+    // 48 bytes/key is measured steady-state for unordered_set<Kmer128>.
     min_k = std::max(min_k, minLen());
     max_k = std::min(max_k, MAX_FILTER_LEN);
     double total = 0;
@@ -204,8 +204,8 @@ namespace FasTag
     const int k = static_cast<int>(t.size());
     if (k < 1 || k > MAX_FILTER_LEN) return false;
     if (static_cast<size_t>(k) >= sets_.size() || !built_[static_cast<size_t>(k)]) return false;
-    const __uint128_t e = encode(t.data(), k);
-    if (e == ~static_cast<__uint128_t>(0)) return false;
+    const Kmer128 e = encode(t.data(), k);
+    if (e == Kmer128::invalid()) return false;
     return sets_[static_cast<size_t>(k)].count(e) > 0;
   }
 

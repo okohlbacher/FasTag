@@ -24,9 +24,31 @@ namespace FasTag
   /// Sentinel for ambiguity codes; no tag can contain it.
   constexpr char AMBIG = '#';
 
+  /// A 125-bit k-mer key as two 64-bit halves.
+  ///
+  /// Was __uint128_t, which is a GCC/Clang extension MSVC does not provide -- so
+  /// the whole tool failed to compile there, for one type in one file. Two
+  /// uint64_t are portable, the same 16 bytes, and the only operations needed
+  /// are shift-in-from-the-right and equality.
+  struct Kmer128
+  {
+    uint64_t hi = 0, lo = 0;
+
+    /// Shift left 5 bits and insert a residue code in the low bits.
+    void push5(uint64_t code) noexcept
+    {
+      hi = (hi << 5) | (lo >> 59);   // the 5 bits leaving lo enter hi
+      lo = (lo << 5) | (code & 0x1full);
+    }
+    static Kmer128 invalid() noexcept { return {~0ull, ~0ull}; }
+
+    bool operator==(const Kmer128& o) const noexcept { return hi == o.hi && lo == o.lo; }
+    bool operator!=(const Kmer128& o) const noexcept { return !(*this == o); }
+  };
+
   struct Kmer128Hash
   {
-    size_t operator()(__uint128_t v) const noexcept
+    size_t operator()(const Kmer128& v) const noexcept
     {
       auto mix = [](uint64_t x) {
         x += 0x9e3779b97f4a7c15ull;
@@ -34,8 +56,7 @@ namespace FasTag
         x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
         return x ^ (x >> 31);
       };
-      return static_cast<size_t>(mix(static_cast<uint64_t>(v)) ^
-                                 (mix(static_cast<uint64_t>(v >> 64)) * 3));
+      return static_cast<size_t>(mix(v.lo) ^ (mix(v.hi) * 3));
     }
   };
 
@@ -118,10 +139,10 @@ namespace FasTag
 
     struct Collapse { char a, b, one; };
 
-    static __uint128_t encode(const char* s, int n);
+    static Kmer128 encode(const char* s, int n);
     bool contains(const std::string& t) const;
     void emitReadings(const std::string& seq, size_t i, int k, std::string& cur,
-                      std::unordered_set<__uint128_t, Kmer128Hash>& out, size_t& budget) const;
+                      std::unordered_set<Kmer128, Kmer128Hash>& out, size_t& budget) const;
 
     bool both_;
     int  min_len_ = 0;
@@ -129,7 +150,7 @@ namespace FasTag
     size_t residues_ = 0;
     std::vector<std::string> seqs_;
     std::vector<Collapse> rules_;
-    std::vector<std::unordered_set<__uint128_t, Kmer128Hash>> sets_;  ///< indexed by length
+    std::vector<std::unordered_set<Kmer128, Kmer128Hash>> sets_;  ///< indexed by length
     std::vector<char> built_;
   };
 }
