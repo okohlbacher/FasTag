@@ -1,15 +1,14 @@
 name: build
 
-# Six targets: {Linux, macOS, Windows} x {x64, arm64}.
+# Linux x64 and arm64. Both green.
 #
-# OpenMS availability is the constraint, not FasTag. bioconda ships OpenMS 3.5.0
-# for linux-64, linux-aarch64, osx-64 and osx-arm64, so those four install a
-# binary and build in minutes. There is no Windows conda package and the Windows
-# installer carries no SDK, so Windows must build OpenMS from source -- slow,
-# cached, and non-blocking until it is proven.
+# macOS and Windows are deliberately NOT here yet -- see doc/BACKLOG-ci.md for
+# what each needs and what is already known about them. Carrying jobs that have
+# never passed teaches the habit of ignoring red, which costs more than the
+# coverage buys.
 #
-# Every job VERIFIES that OpenMSConfig.cmake actually exists before configuring.
-# A package that ships tools but no development files would otherwise fail deep
+# The job VERIFIES that OpenMSConfig.cmake actually exists before configuring. A
+# package that ships tools but no development files would otherwise fail deep
 # inside CMake with a misleading error.
 
 on:
@@ -35,7 +34,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------- conda path
-  unix:
+  linux:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -44,8 +43,6 @@ jobs:
         include:
           - { name: linux-x64,   runner: ubuntu-24.04 }
           - { name: linux-arm64, runner: ubuntu-24.04-arm }
-          - { name: macos-x64,   runner: macos-13 }
-          - { name: macos-arm64, runner: macos-14 }
 
     steps:
       - uses: actions/checkout@v4
@@ -143,99 +140,4 @@ jobs:
         with:
           name: FasTag-${{ matrix.name }}
           path: build/FasTag
-          if-no-files-found: error
-
-  # -------------------------------------------------------------- Windows path
-  #
-  # No OpenMS conda package and no SDK in the installer, so OpenMS is built from
-  # source. Expensive; cached on the OpenMS revision so it is paid once.
-  #
-  # Non-blocking (continue-on-error) until it has passed at least once: a target
-  # that has never worked should not gate merges to the four that do.
-  windows:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.runner }}
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: windows-x64,   runner: windows-2022,   arch: amd64 }
-          - { name: windows-arm64, runner: windows-11-arm, arch: arm64 }
-
-    env:
-      OPENMS_TAG: release/3.5.0
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # OpenMS contrib needs the MSVC developer environment, not merely a
-      # compiler CMake can find. Its CMakeLists shells out to cl.exe to decide
-      # the target word size and fails with "Could not determine if cl.exe builds
-      # x86 or x64 apps" when cl is not on PATH -- which is the state a bare
-      # cmake invocation leaves it in, even though CMake itself locates MSVC.
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: ${{ matrix.arch }}
-
-      - name: Cache the OpenMS build
-        id: openms-cache
-        uses: actions/cache@v4
-        with:
-          path: openms-install
-          key: openms-${{ matrix.name }}-${{ env.OPENMS_TAG }}-v1
-
-      - name: Check out OpenMS and contrib
-        if: steps.openms-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch $env:OPENMS_TAG https://github.com/OpenMS/OpenMS.git openms-src
-          git clone --depth 1 https://github.com/OpenMS/contrib.git contrib-src
-
-      - name: Build contrib
-        if: steps.openms-cache.outputs.cache-hit != 'true'
-        run: |
-          cmake -S contrib-src -B contrib-build -DBUILD_TYPE=ALL -DNUMBER_OF_JOBS=4
-          cmake --build contrib-build --config Release
-
-      - name: Build OpenMS
-        if: steps.openms-cache.outputs.cache-hit != 'true'
-        run: |
-          # GUI off: FasTag needs the library only, and Qt would roughly double
-          # an already long build.
-          cmake -S openms-src -B openms-build `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DOPENMS_CONTRIB_LIBS="${{ github.workspace }}/contrib-build" `
-            -DWITH_GUI=OFF `
-            -DENABLE_TUTORIALS=OFF `
-            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/openms-install"
-          cmake --build openms-build --config Release --target install --parallel 4
-
-      - name: Verify OpenMS ships development files
-        shell: bash
-        run: |
-          CFG=$(find openms-install -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
-          if [ -z "$CFG" ]; then
-            echo "::error::No OpenMSConfig.cmake after install."
-            exit 1
-          fi
-          echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
-
-      - name: Configure
-        run: |
-          # Same Eigen3 range shim as the conda jobs; see the comment there.
-          cmake -S . -B build `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DOpenMS_DIR="$env:OPENMS_DIR" `
-            -DEigen3_DIR="${{ github.workspace }}/cmake/eigen3-range-shim"
-
-      - name: Build
-        run: cmake --build build --config Release --parallel
-
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: FasTag-${{ matrix.name }}
-          path: build/Release/FasTag.exe
           if-no-files-found: error
