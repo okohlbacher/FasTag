@@ -16,6 +16,7 @@
 #ifdef FASTAG_HAVE_MZPEAK
 #include <OpenMS/FORMAT/MzPeakFile.h>
 #include <OpenMS/INTERFACES/IMSDataConsumer.h>
+#include <functional>
 #endif
 
 #include "FasTagger.h"
@@ -54,6 +55,67 @@ using namespace OpenMS;
 */
 //-------------------------------------------------------------------------
 
+#ifdef FASTAG_HAVE_MZPEAK
+namespace
+{
+  /// Buffers pushed spectra into bounded chunks and hands each to a callback.
+  ///
+  /// MzPeakFile is push-based -- transform() calls consumeSpectrum() once per
+  /// spectrum -- while the tagging loop wants a batch to parallelise over. This
+  /// adapter is the whole of the mzPeak support; everything downstream is the
+  /// existing mzML code path.
+  ///
+  /// The chunk is bounded by PEAKS, not by spectrum count. A fixed count is the
+  /// obvious choice and the wrong one: spectra range from ~100 peaks to over
+  /// 130,000 across the benchmark corpus, so "2048 spectra" is somewhere between
+  /// 200 K and 270 M peaks. Bounding peaks keeps the buffer flat whatever the
+  /// data looks like, which is the property the streaming reader bought and this
+  /// must not hand back.
+  ///
+  /// MS1 and precursor-less spectra are dropped HERE rather than in the tagging
+  /// callback, so they never occupy the buffer. On a DDA file that is most of
+  /// the input.
+  class ChunkingConsumer : public Interfaces::IMSDataConsumer
+  {
+  public:
+    using Flush = std::function<void(std::vector<MSSpectrum>&)>;
+
+    ChunkingConsumer(Flush flush, size_t peak_budget)
+      : flush_(std::move(flush)), budget_(peak_budget) {}
+
+    void consumeSpectrum(SpectrumType& s) override
+    {
+      if (s.getMSLevel() != 2 || s.empty() || s.getPrecursors().empty()) return;
+      peaks_ += s.size();
+      buf_.push_back(s);
+      if (peaks_ >= budget_) { flush_(buf_); peaks_ = 0; }
+    }
+
+    /// FasTag tags spectra; chromatograms are not input to it.
+    void consumeChromatogram(ChromatogramType&) override {}
+
+    /// Deliberately ignored. Presizing from it would make correctness depend on
+    /// a call the interface only recommends ("expected to be called"); the flush
+    /// callback grows its own storage instead.
+    void setExpectedSize(Size, Size) override {}
+
+    void setExperimentalSettings(const ExperimentalSettings& e) override { settings_ = e; }
+    const ExperimentalSettings& settings() const { return settings_; }
+
+    /// Must be called after transform(): the final partial chunk is otherwise
+    /// never flushed and its spectra vanish without a word.
+    void finish() { if (!buf_.empty()) { flush_(buf_); peaks_ = 0; } }
+
+  private:
+    Flush flush_;
+    size_t budget_;
+    size_t peaks_ = 0;
+    std::vector<MSSpectrum> buf_;
+    ExperimentalSettings settings_;
+  };
+}
+#endif
+
 class TOPPFasTag : public TOPPBase
 {
 public:
@@ -72,10 +134,16 @@ protected:
   void registerOptionsAndFlags_() override
   {
     registerInputFile_("in", "<file>", "", "Input spectra");
-    // mzML only. The build may detect MzPeakFile (see CMakeLists), but there is
-    // no mzPeak read path yet, and advertising a format the tool cannot read
-    // turns a clear "unsupported" into a confusing parse failure.
+    // mzpeak is offered only when the OpenMS this was built against provides
+    // MzPeakFile, so the accepted formats differ between builds. That is
+    // deliberate -- advertising a format the binary cannot read would turn a
+    // clear "unsupported" into a confusing parse failure -- and the configure
+    // step prints which one you have.
+#ifdef FASTAG_HAVE_MZPEAK
+    setValidFormats_("in", ListUtils::create<String>("mzML,mzpeak"));
+#else
     setValidFormats_("in", ListUtils::create<String>("mzML"));
+#endif
     registerOutputFile_("out", "<file>", "", "Tag list (tab-separated)");
     setValidFormats_("out", ListUtils::create<String>("tsv"));
 
@@ -233,10 +301,33 @@ protected:
     //
     // -out_spectra still needs getMetaData() for the run-level settings, so that
     // path keeps the full load.
+    // mzPeak is read through its own push-based path, so none of the mzML
+    // reader setup below applies to it.
+    const bool mzpeak_in = FileHandler::getType(in) == FileTypes::MZPEAK;
+#ifndef FASTAG_HAVE_MZPEAK
+    if (mzpeak_in)
+    {
+      OPENMS_LOG_ERROR << "'" << in << "' is mzPeak, but this FasTag was built "
+                          "against an OpenMS without MzPeakFile. Rebuild against "
+                          "an OpenMS that provides it, or convert to mzML."
+                       << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+#endif
+    if (mzpeak_in && !out_spectra.empty())
+    {
+      // -out_spectra writes mzML, which needs run-level ExperimentalSettings.
+      // The consumer is handed them, but that combination is untested, so refuse
+      // rather than write a file that may be subtly wrong.
+      OPENMS_LOG_ERROR << "-out_spectra is not supported with mzPeak input yet."
+                       << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+
     OnDiscMSExperiment ondisc;
     PeakMap exp;
-    const bool streaming = ondisc.openFile(in, out_spectra.empty());
-    if (!streaming)
+    const bool streaming = !mzpeak_in && ondisc.openFile(in, out_spectra.empty());
+    if (!streaming && !mzpeak_in)
     {
       OPENMS_LOG_WARN << "'" << in << "' has no usable index; reading it entirely "
                          "into memory. Run FileConverter to write an indexed mzML "
@@ -250,7 +341,7 @@ protected:
     // clean run with an empty output file. That is the worst possible failure --
     // indistinguishable from a file that genuinely holds no MS2 -- so probe for
     // it and take the slow path instead of producing a confident nothing.
-    if (streaming && out_spectra.empty())
+    if (streaming && out_spectra.empty() && !mzpeak_in)
     {
       bool have_meta = false;
       const Size probe = std::min<Size>(ondisc.getNrSpectra(), 64);
@@ -266,7 +357,7 @@ protected:
         ondisc.openFile(in);
       }
     }
-    const size_t n_total = streaming ? ondisc.getNrSpectra() : exp.size();
+    const size_t n_total = mzpeak_in ? 0 : (streaming ? ondisc.getNrSpectra() : exp.size());
 
     // Warn when the fragment tolerance looks far too tight for the data.
     //
@@ -282,7 +373,7 @@ protected:
     // the sample is still many times the tolerance, no real fragment can be
     // matched at that tolerance either.
     {
-      double tightest = std::numeric_limits<double>::max();
+      double tightest = mzpeak_in ? 0.0 : std::numeric_limits<double>::max();
       double at_mz = 0;
       const Size want = std::min<Size>(n_total, 200);
       const Size step = std::max<Size>(1, n_total / std::max<Size>(want, 1));
@@ -425,6 +516,59 @@ protected:
       if (!out_spectra.empty()) kept_spec[idx] = spec;
     };
 
+    // Tag a buffered chunk in parallel and append its rows in order.
+    //
+    // Used by the mzPeak path, which is push-based: MzPeakFile hands over one
+    // spectrum at a time, so there is nothing to index into and no random access
+    // to parallelise over. Buffer, then run the same per-spectrum work over the
+    // buffer, appending at base+j so order follows input regardless of
+    // scheduling -- the guarantee the mzML path gets from indexing by i.
+    //
+    // The vectors grow HERE, outside the parallel region. Growing them inside
+    // would be a data race, and presizing from setExpectedSize would make
+    // correctness depend on a call the interface only recommends.
+    auto flush_chunk = [&](std::vector<MSSpectrum>& buf)
+    {
+      if (buf.empty()) return;
+      const size_t base = rows.size();
+      rows.resize(base + buf.size());
+      keep.resize(base + buf.size(), 0);
+      if (!out_spectra.empty()) kept_spec.resize(base + buf.size());
+
+      const SignedSize n = static_cast<SignedSize>(buf.size());
+#pragma omp parallel for schedule(dynamic, 16)
+      for (SignedSize j = 0; j < n; ++j)
+      {
+        const size_t tid = static_cast<size_t>(omp_get_thread_num());
+        record(base + static_cast<size_t>(j), tag_one(buf[j], tid), buf[j]);
+      }
+      buf.clear();
+    };
+
+    if (mzpeak_in)
+    {
+#ifdef FASTAG_HAVE_MZPEAK
+      // 1 M peaks per chunk, ~16 MB of Peak1D, independent of how many spectra
+      // that turns out to be.
+      //
+      // WARNING -- mzPeak input is NOT memory-bounded, and the cause is not
+      // here. MzPeakFile::transform() materialises the run rather than streaming
+      // it, despite the consumer interface existing to avoid exactly that.
+      // Measured: a 2.11 GB .mzpeak peaks at 23.7 GB resident, ~11x the file,
+      // against 169 MB for the same data as mzML. Varying this budget over a 16x
+      // range moved peak memory by under 10% (1027 / 945 / 986 MB on a 93 MB
+      // file), which is what shows the buffer is not the term that matters.
+      //
+      // Output is correct and byte-identical to the mzML path. Fine for files
+      // small relative to RAM; prefer mzML for large runs until the upstream
+      // reader streams. Tracked in doc/BACKLOG-mzpeak.md.
+      ChunkingConsumer consumer(flush_chunk, 1000u * 1000u);
+      MzPeakFile().transform(in, &consumer);
+      consumer.finish();   // the final partial chunk, otherwise silently dropped
+#endif
+    }
+    else
+    {
 #pragma omp parallel
     {
       // One reader per thread: OnDiscMSExperiment keeps an open stream and is
@@ -442,6 +586,7 @@ protected:
         const size_t tid = static_cast<size_t>(omp_get_thread_num());
         record(static_cast<size_t>(i), tag_one(spec, tid), spec);
       }
+    }
     }
 
     for (size_t t = 0; t < per_thread_len.size(); ++t)

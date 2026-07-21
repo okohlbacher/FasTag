@@ -69,6 +69,33 @@ else()
                  "past ~16 threads. See doc/OPENMS-FAST-READER.md.")
 endif()
 
+# mzPeak input, if this OpenMS provides it.
+#
+# MzPeakFile is not in OpenMS mainline yet (github.com/OpenMS/mzpeak, and the
+# OpenMS-side handler on a feature branch), so FasTag must build either way. When
+# the header is present, -in also accepts .mzpeak; when it is not, the tool is
+# identical minus that format.
+#
+# Detected by header presence rather than version, because there is no version to
+# test against while the API is pre-1.0.
+set(_fastag_mzpeak OFF)
+if(_openms_inc)
+  foreach(_d IN LISTS _openms_inc)
+    string(GENEX_STRIP "${_d}" _d)
+    if(_d AND EXISTS "${_d}/OpenMS/FORMAT/MzPeakFile.h")
+      set(_fastag_mzpeak ON)
+      break()
+    endif()
+  endforeach()
+endif()
+
+if(_fastag_mzpeak)
+  message(STATUS "FasTag: mzPeak input available (-in accepts .mzpeak)")
+else()
+  message(STATUS "FasTag: mzPeak input NOT available -- this OpenMS has no "
+                 "MzPeakFile. mzML input is unaffected.")
+endif()
+
 # OpenMP, declared rather than inherited.
 #
 # The parallel loop is the tool's central performance claim, and it was working
@@ -96,6 +123,9 @@ add_executable(FasTag src/FasTag.cpp)
 target_link_libraries(FasTag PRIVATE fastag_core)
 if(OpenMP_CXX_FOUND)
   target_link_libraries(FasTag PRIVATE OpenMP::OpenMP_CXX)
+endif()
+if(_fastag_mzpeak)
+  target_compile_definitions(FasTag PRIVATE FASTAG_HAVE_MZPEAK)
 endif()
 install(TARGETS FasTag RUNTIME DESTINATION bin)
 
