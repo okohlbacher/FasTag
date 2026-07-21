@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21 FATAL_ERROR)
-project(FasTag VERSION 0.3.0 LANGUAGES CXX)
+project(FasTag VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,6 +69,23 @@ else()
                  "past ~16 threads. See doc/OPENMS-FAST-READER.md.")
 endif()
 
+# OpenMP, declared rather than inherited.
+#
+# The parallel loop is the tool's central performance claim, and it was working
+# only because OpenMS happened to propagate the flags transitively. A clean build
+# against an OpenMS that did not would compile silently -- the #pragmas become
+# no-ops and the omp_* fallback stubs in FasTag.cpp return 1 -- producing a
+# correct but SERIAL binary that still claims to scale. Ask explicitly, and say
+# so when it is missing.
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+  message(STATUS "FasTag: OpenMP ${OpenMP_CXX_VERSION} -- parallel over spectra")
+else()
+  message(WARNING "FasTag: no OpenMP. The build is correct but SERIAL; -threads "
+                  "will have no effect and README.md's performance figures do "
+                  "not apply.")
+endif()
+
 add_library(fastag_core STATIC src/FasTagger.cpp src/FastaFilter.cpp)
 target_include_directories(fastag_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -77,6 +94,9 @@ target_link_libraries(fastag_core PUBLIC OpenMS)
 
 add_executable(FasTag src/FasTag.cpp)
 target_link_libraries(FasTag PRIVATE fastag_core)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(FasTag PRIVATE OpenMP::OpenMP_CXX)
+endif()
 install(TARGETS FasTag RUNTIME DESTINATION bin)
 
 option(FASTAG_BUILD_TESTS "Build tests" ON)

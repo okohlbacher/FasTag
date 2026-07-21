@@ -50,8 +50,10 @@ occurring in the given proteins; `-out_spectra` writes the spectra carrying them
 giving a tag-filtered mzML. Matching folds I/L (isobaric, so an emitted `L` says
 nothing about which residue it was), tries both orientations (tags are stored
 N->C under a y-ion assumption, so b-derived tags read reversed), and accepts
-isobaric substitutions derived from residue masses at the configured tolerance
-(`N` = `GG`, `Q` = `GA`, and wider, `R` = `GV`, `W` = `AD`/`GE`/`SV`).
+isobaric substitutions derived from residue masses at the configured tolerance.
+At the default `-isobaric_tolerance 0.04` (20 ppm across two peaks at m/z 1000)
+the derived set is `N`=`GG`, `Q`=`GA`/`AG`, `R`=`GV`/`VG`, `W`=`AD`/`GE`/`SV`,
+`K`=`GA`. No residue equals a sum of three, so one level of collapse suffices.
 
 A minimum tag length is derived from database size, because a short tag occurs in
 almost any protein by chance. Every run prints matches beside the number expected
@@ -85,9 +87,13 @@ every thread count.
 Throughput tracks **peaks**, not spectra — 46 M peaks/s on the Astral run — which
 is what a graph over peak pairs should do.
 
-**Memory is O(threads), not O(file).** Spectra stream from the index one at a
-time, so the 12.2 GB ddaPASEF run peaks at 701 MB single-threaded and 1.5 GB on
-16 threads. No mzML is ever fully resident.
+**Memory is O(threads), not O(file)** — for the default path. Spectra stream from
+the index one at a time, so the 12.2 GB ddaPASEF run peaks at 701 MB
+single-threaded and 1.5 GB on 16 threads. No mzML is ever fully resident.
+
+`-out_spectra` is the exception: it holds one slot per input spectrum in order to
+write them back in input order, so that path needs memory proportional to the
+file.
 
 Against the reference implementation, same file, same hardware, run sequentially:
 
@@ -185,7 +191,10 @@ pseudo-DDA spectra:
   unique tags
 
 Against Sage ground truth (14,867 PSMs at 1% FDR), counting spectra that gain a
-correctly placed tag:
+correctly placed tag. **These were measured before the scoring fixes in 0.4.0**
+(the complement population was pooled across fragment charges, and a peak could
+be its own complement); they are the right order of magnitude but have not been
+re-run:
 
 | | spectra | vs baseline |
 |---|---|---|

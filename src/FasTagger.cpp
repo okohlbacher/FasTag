@@ -272,7 +272,10 @@ namespace FasTag
     const int k = std::min(std::max(tag_peaks, k_min_), k_max_);
     const auto& v = mz_null_[static_cast<size_t>(k - k_min_)];
     if (v.empty()) return 1.0;
-    const size_t r = static_cast<size_t>(std::lower_bound(v.begin(), v.end(), sse) - v.begin());
+    if (!std::isfinite(sse)) return 1.0;   // a non-finite SSE is not evidence
+    // upper_bound, not lower_bound: the claim is P(SSE <= observed), and
+    // lower_bound counts only the samples strictly below it.
+    const size_t r = static_cast<size_t>(std::upper_bound(v.begin(), v.end(), sse) - v.begin());
     return std::max(1.0 / v.size(), static_cast<double>(r) / v.size());
   }
 
@@ -289,7 +292,7 @@ namespace FasTag
       std::vector<uint8_t> has_compl;  ///< bit z-1 set if a complement exists at charge z
       double precursor_mass = 0;
       int n_frag_charges = 1;
-      int n_with_compl = 0;
+      std::vector<int> n_with_compl;   ///< indexed by fragment charge
     };
 
     Prepared prepare(const MSSpectrum& in, double precursor_mz, int charge, const Param& p)
@@ -298,7 +301,11 @@ namespace FasTag
       s.precursor_mass = precursor_mz * charge - charge * PROTON;
       // +2 fragments are only sought from precursors of charge >= 3, as the paper
       // specifies.
-      s.n_frag_charges = std::max(1, charge - 1);
+      // Capped at 8: has_compl is a uint8_t bitmask, so bit z-1 for z > 8 is
+      // silently lost, and 1u << (z-1) is undefined well before that. Fragment
+      // charges above 8 are not a real regime for peptide MS/MS, so bound it
+      // rather than widen the mask.
+      s.n_frag_charges = std::min(8, std::max(1, charge - 1));
 
       // Drop everything above the precursor, then keep the n most intense.
       //
@@ -445,11 +452,32 @@ namespace FasTag
       for (size_t i = 0; i < n; ++i)
         for (int z = 1; z <= s.n_frag_charges; ++z)
         {
+          // Two fragments of the same charge z satisfy
+          //   m/z(b) + m/z(y) = (Nb + z*proton)/z + (Ny + z*proton)/z
+          //                   = M/z + 2*proton,      because Nb + Ny = M.
+          // Note the proton term is NOT divided by z; a review suggested
+          // (M + 2*proton)/z, which is wrong for exactly that reason.
           const double cmz = s.precursor_mass / z + 2.0 * PROTON - s.spec[i].getMZ();
-          if (s.spec.findNearest(cmz, p.complement_tol) >= 0)
+          // j != i: a peak at the midpoint would otherwise be its own partner,
+          // manufacturing complement evidence from a single ion and inflating
+          // both the population and the observed count.
+          const int j = s.spec.findNearest(cmz, p.complement_tol);
+          if (j >= 0 && static_cast<size_t>(j) != i)
             s.has_compl[i] |= static_cast<uint8_t>(1u << (z - 1));
         }
-      for (size_t i = 0; i < n; ++i) if (s.has_compl[i]) ++s.n_with_compl;
+      // Counted PER CHARGE, not pooled across charges.
+      //
+      // scorePath draws its observed count from one fragment charge, so the
+      // hypergeometric's population must be that same charge. Pooling made K the
+      // size of the union while obs stayed charge-specific -- two populations in
+      // one distribution, which inflates K and leaves the tail too permissive.
+      // Only bites when n_frag_charges > 1, i.e. precursor charge >= 3: about
+      // 36% of spectra on S23, and invisible to any test built on charge-2
+      // precursors, which is why it survived.
+      s.n_with_compl.assign(static_cast<size_t>(s.n_frag_charges) + 1, 0);
+      for (size_t i = 0; i < n; ++i)
+        for (int z = 1; z <= s.n_frag_charges; ++z)
+          if (s.has_compl[i] & (1u << (z - 1))) ++s.n_with_compl[static_cast<size_t>(z)];
       return s;
     }
 
@@ -576,11 +604,13 @@ namespace FasTag
 
       // Probability of seeing at least this many complemented peaks among k drawn
       // from the spectrum. Dropped when the spectrum has no complements at all.
-      const bool use_compl = s.n_with_compl > 0;
+      const size_t zi = static_cast<size_t>(charge);
+      const int compl_pop = zi < s.n_with_compl.size() ? s.n_with_compl[zi] : 0;
+      const bool use_compl = compl_pop > 0;
       if (use_compl && n_compl > 0)
       {
         const unsigned N = static_cast<unsigned>(s.spec.size());
-        const unsigned K = static_cast<unsigned>(s.n_with_compl);
+        const unsigned K = static_cast<unsigned>(compl_pop);
         const unsigned n = static_cast<unsigned>(k);
         // The support is [max(0, n+K-N), min(K, n)], not [0, n]: when most peaks
         // are complemented, a tag CANNOT have few. Boost throws on an argument
@@ -747,7 +777,12 @@ namespace FasTag
     if (charge <= 0) charge = 2;
 
     const Prepared s = prepare(in, precursor_mz, charge, p);
-    if (s.spec.size() < static_cast<size_t>(p.tag_length) + 1) return out;
+    // A gap spends one fewer peak than it spells residues, so a gapped tag of
+    // tag_length residues needs only tag_length peaks. Demanding tag_length + 1
+    // unconditionally discarded spectra holding exactly the gapped ladder.
+    const size_t min_peaks =
+        static_cast<size_t>(std::max(2, p.tag_length + 1 - std::max(0, p.max_gaps)));
+    if (s.spec.size() < min_peaks) return out;
 
     std::vector<Tag> scored;
     size_t n_seeds = 0;

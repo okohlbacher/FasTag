@@ -296,6 +296,108 @@ int main()
                 "(%d gapped, worst %.5f Da)\n", closed, checked, gapped, worst);
   }
 
+  // 9. a charge-3 precursor survives, with two fragment charges in play
+  //
+  // Every other test here uses charge 2, where n_frag_charges == 1. Nothing
+  // exercised the n_frag_charges > 1 path at all, which is how a real bug lived
+  // there: prepare() pooled the complement population across charges while
+  // scorePath counted at one charge, so the hypergeometric's K and obs came from
+  // different populations. Fixed; this test covers the path.
+  //
+  // WHAT THIS DOES NOT PROVE. It does not discriminate that bug: reintroducing
+  // the pooled count leaves this test passing with byte-identical output, which
+  // was verified rather than assumed. A discriminating test needs a spectrum
+  // whose complement population is EMPTY at one fragment charge and non-empty at
+  // another -- then pooled and per-charge disagree about whether the complement
+  // subscore applies at all, and Fisher's degrees of freedom change with it.
+  // Constructing that spectrum is fiddly and is left as a follow-up rather than
+  // dressed up as done.
+  {
+    const std::string pep = "VGAHAGEYGAEALERSAMPLERK";
+    const AASequence aa = AASequence::fromString(pep);
+    const double M = aa.getMonoWeight();
+
+    // Charge 3 precursor -> n_frag_charges = 2, so +1 and +2 complements both
+    // exist and a pooled count would differ from a per-charge one.
+    const double pmz = (M + 3 * Constants::PROTON_MASS_U) / 3;
+    MSSpectrum s;
+    for (size_t i = 1; i < aa.size(); ++i)
+    {
+      s.emplace_back(aa.getPrefix(i).getMonoWeight(Residue::BIon, 1), 0.7);
+      s.emplace_back(aa.getSuffix(i).getMonoWeight(Residue::YIon, 1), 0.8);
+      // a few doubly-charged fragments, so the z=2 complement population is
+      // genuinely different from the z=1 one
+      if (i % 3 == 0)
+        s.emplace_back(aa.getSuffix(i).getMonoWeight(Residue::YIon, 2) / 2.0, 0.4);
+    }
+    s.sortByPosition();
+
+    FasTag::Param p;
+    p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
+    const FasTag::Tables tab(p);
+    const auto tags = FasTag::tagSpectrum(s, pmz, 3, p, tab);
+
+    CHECK(!tags.empty(), "no tags from a charge-3 precursor");
+    // Every E-value must be finite and positive. A mismatched population can
+    // push the hypergeometric outside its support, which is how this surfaces.
+    int bad = 0;
+    for (const auto& t : tags)
+      if (!(t.evalue > 0.0) || !std::isfinite(t.evalue) ||
+          !(t.p_complement >= 0.0 && t.p_complement <= 1.0)) ++bad;
+    CHECK(bad == 0, "%d tags have an out-of-range E-value or complement p-value", bad);
+    int correct = 0;
+    for (const auto& t : tags) if (reads(pep, t.seq)) ++correct;
+    CHECK(correct > 0, "no tag from the charge-3 spectrum reads the peptide");
+    std::printf("9. charge-3 precursor (2 fragment charges): %zu tags, %d read the "
+                "peptide, %d with an out-of-range p-value\n", tags.size(), correct, bad);
+  }
+
+  // 10. the stored direction is N->C, asserted FORWARD-ONLY
+  //
+  // reads() accepts either orientation, because a b-derived tag legitimately
+  // reads reversed. That is right for every other test here and useless for
+  // this one: mutation testing showed the whole suite passes with spell()
+  // reversed, so nothing was pinning the storage convention at all.
+  //
+  // A y-only spectrum removes the ambiguity. Traversal runs low->high m/z, which
+  // is C->N for y ions, and spell() reverses it, so a correct tag must appear in
+  // the peptide FORWARD. Searching forward only is the whole point -- do not be
+  // tempted to reuse reads() here.
+  {
+    const std::string pep = "VGAHAGEYGAEALER";
+    const AASequence aa = AASequence::fromString(pep);
+    double pmz = 0;
+    synth(pep, 0, 1, pmz);                       // for the precursor m/z
+
+    MSSpectrum y;                                // y ions only: no b/y ambiguity
+    for (size_t i = 1; i < aa.size(); ++i)
+      y.emplace_back(aa.getSuffix(i).getMonoWeight(Residue::YIon, 1), 0.5 + 0.02 * i);
+    y.sortByPosition();
+
+    FasTag::Param p;
+    p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
+    const FasTag::Tables tab(p);
+    const auto tags = FasTag::tagSpectrum(y, pmz, 2, p, tab);
+
+    auto fold = [](std::string x) { for (char& c : x) if (c == 'I') c = 'L'; return x; };
+    const std::string fp = fold(pep);
+    int fwd = 0, rev_only = 0;
+    for (const auto& t : tags)
+    {
+      const std::string ft = fold(t.seq);
+      const std::string rt(ft.rbegin(), ft.rend());
+      const bool f = fp.find(ft) != std::string::npos;
+      const bool r = fp.find(rt) != std::string::npos;
+      if (f) ++fwd; else if (r) ++rev_only;
+    }
+    CHECK(fwd > 0, "no tag from a y-only spectrum reads the peptide forward");
+    CHECK(fwd > rev_only,
+          "%d tags read forward but %d only backwards -- the stored direction "
+          "looks reversed", fwd, rev_only);
+    std::printf("10. y-only spectrum: %d tags read N->C forward, %d only reversed\n",
+                fwd, rev_only);
+  }
+
   std::printf(failures ? "\n%d FAILURES\n" : "\nall checks passed\n", failures);
   return failures ? 1 : 0;
 }

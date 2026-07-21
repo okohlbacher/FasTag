@@ -13,6 +13,10 @@
 #include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 #include <OpenMS/KERNEL/OnDiscMSExperiment.h>
+#ifdef FASTAG_HAVE_MZPEAK
+#include <OpenMS/FORMAT/MzPeakFile.h>
+#include <OpenMS/INTERFACES/IMSDataConsumer.h>
+#endif
 
 #include "FasTagger.h"
 #include "FastaFilter.h"
@@ -68,6 +72,9 @@ protected:
   void registerOptionsAndFlags_() override
   {
     registerInputFile_("in", "<file>", "", "Input spectra");
+    // mzML only. The build may detect MzPeakFile (see CMakeLists), but there is
+    // no mzPeak read path yet, and advertising a format the tool cannot read
+    // turns a clear "unsupported" into a confusing parse failure.
     setValidFormats_("in", ListUtils::create<String>("mzML"));
     registerOutputFile_("out", "<file>", "", "Tag list (tab-separated)");
     setValidFormats_("out", ListUtils::create<String>("tsv"));
@@ -75,7 +82,10 @@ protected:
     registerInputFile_("fasta", "<file>", "", "Report only tags occurring in these sequences", false);
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
     registerOutputFile_("out_spectra", "<file>", "",
-                        "Write spectra carrying a reported tag to this mzML", false);
+                        "Write spectra carrying a reported tag to this mzML. Note "
+                        "this path holds one slot per input spectrum, so unlike "
+                        "the default it needs memory proportional to the FILE, "
+                        "not to the thread count", false);
     setValidFormats_("out_spectra", ListUtils::create<String>("mzML"));
 
     registerIntOption_("tag_length", "<n>", 3, "Seed tag length in residues", false);
@@ -107,7 +117,9 @@ protected:
     setValidStrings_("fragment_tolerance_unit", ListUtils::create<String>("ppm,Da"));
 
     registerIntOption_("max_peaks", "<n>", 100,
-                       "Peaks retained per spectrum; 0 = keep all", false);
+                       "Peaks retained per spectrum; 0 uses the internal ceiling "
+                       "of 1024, not unlimited -- the scoring tables are built to "
+                       "that bound", false);
     setMinInt_("max_peaks", 0);
     registerIntOption_("peaks_per_window", "<n>", 0,
                        "Keep this many peaks per 100 Da window instead of the "
@@ -334,29 +346,25 @@ protected:
                         per_thread_tags(per_thread_len.size(), 0),
                         per_thread_rep(per_thread_len.size(), 0);
 
-#pragma omp parallel
+    // The per-spectrum work, shared by every input path.
+    //
+    // Takes its thread id rather than calling omp_get_thread_num() internally,
+    // and returns its rows rather than writing them: the caller owns where a
+    // result lands. That is what lets a second input path reuse this without the
+    // two drifting apart, which is the failure mode that matters here -- two
+    // readers that mostly agree are worse than one.
+    //
+    // Callers must not resize rows/keep/kept_spec while this runs.
+    auto tag_one = [&](const MSSpectrum& spec, size_t tid) -> std::string
     {
-      // One reader per thread: OnDiscMSExperiment keeps an open stream and is
-      // documented as not thread-safe.
-      // Copy-constructed, not assigned: OnDiscMSExperiment's operator= is private.
-      std::unique_ptr<OnDiscMSExperiment> reader;
-      if (streaming) reader = std::make_unique<OnDiscMSExperiment>(ondisc);
-
-#pragma omp for schedule(dynamic, 64)
-    for (SignedSize i = 0; i < n_spec; ++i)
-    {
-      const MSSpectrum loaded = streaming ? reader->getSpectrum(static_cast<Size>(i))
-                                          : MSSpectrum();
-      const MSSpectrum& spec = streaming ? loaded : exp[static_cast<Size>(i)];
-      if (spec.getMSLevel() != 2 || spec.empty() || spec.getPrecursors().empty()) continue;
-      const size_t tid = static_cast<size_t>(omp_get_thread_num());
+      std::string buf;
+      if (spec.getMSLevel() != 2 || spec.empty() || spec.getPrecursors().empty()) return buf;
       ++per_thread_ms2[tid];
 
       const auto& prec = spec.getPrecursors().front();
       const auto tags = FasTag::tagSpectrum(spec, prec.getMZ(), prec.getCharge(), p, tables);
       per_thread_tags[tid] += tags.size();
 
-      std::string buf;
       for (const auto& t : tags)
       {
         const char* hit = "-";
@@ -384,15 +392,56 @@ protected:
                                     spec.getNativeID().c_str(), t.seq.c_str(), t.seq.size(),
                                     t.charge, t.nterm_mass, t.cterm_mass,
                                     t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue, hit);
-        if (m > 0) buf.append(line, static_cast<size_t>(m));
+        // snprintf returns the length it WOULD have written, which a long native
+        // ID can push past the buffer. Appending that many bytes reads past
+        // `line`. Clamp, and re-format on the heap rather than emit a truncated
+        // row -- half a row is a corrupt TSV, not a cosmetic problem.
+        if (m < 0) continue;
+        if (static_cast<size_t>(m) < sizeof line)
+        {
+          buf.append(line, static_cast<size_t>(m));
+        }
+        else
+        {
+          std::vector<char> big(static_cast<size_t>(m) + 1);
+          const int m2 = std::snprintf(big.data(), big.size(),
+                                       "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\t%g\t%s\n",
+                                       spec.getNativeID().c_str(), t.seq.c_str(), t.seq.size(),
+                                       t.charge, t.nterm_mass, t.cterm_mass,
+                                       t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue, hit);
+          if (m2 > 0) buf.append(big.data(), static_cast<size_t>(m2));
+        }
       }
-      if (!buf.empty())
+      return buf;
+    };
+
+    // Record one spectrum's result at its global index. Serial or parallel: the
+    // index is the caller's, so output order never depends on scheduling.
+    auto record = [&](size_t idx, std::string&& buf, const MSSpectrum& spec)
+    {
+      if (buf.empty()) return;
+      rows[idx].swap(buf);
+      keep[idx] = 1;
+      if (!out_spectra.empty()) kept_spec[idx] = spec;
+    };
+
+#pragma omp parallel
+    {
+      // One reader per thread: OnDiscMSExperiment keeps an open stream and is
+      // documented as not thread-safe.
+      // Copy-constructed, not assigned: OnDiscMSExperiment's operator= is private.
+      std::unique_ptr<OnDiscMSExperiment> reader;
+      if (streaming) reader = std::make_unique<OnDiscMSExperiment>(ondisc);
+
+#pragma omp for schedule(dynamic, 64)
+      for (SignedSize i = 0; i < n_spec; ++i)
       {
-        rows[static_cast<size_t>(i)].swap(buf);
-        keep[static_cast<size_t>(i)] = 1;
-        if (!out_spectra.empty()) kept_spec[static_cast<size_t>(i)] = spec;
+        const MSSpectrum loaded = streaming ? reader->getSpectrum(static_cast<Size>(i))
+                                            : MSSpectrum();
+        const MSSpectrum& spec = streaming ? loaded : exp[static_cast<Size>(i)];
+        const size_t tid = static_cast<size_t>(omp_get_thread_num());
+        record(static_cast<size_t>(i), tag_one(spec, tid), spec);
       }
-    }
     }
 
     for (size_t t = 0; t < per_thread_len.size(); ++t)

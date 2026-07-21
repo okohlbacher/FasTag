@@ -1,6 +1,6 @@
 # Bill of Materials
 
-FasTag v0.3.0 · MIT · <https://github.com/okohlbacher/FasTag>
+FasTag v0.4.0 · MIT · <https://github.com/okohlbacher/FasTag>
 
 Input and output are mzML. mzPeak is designed but not built; see doc/BACKLOG.md.
 
