@@ -42,6 +42,24 @@ namespace FasTag
     int    peaks_per_window = 0;
     int    max_tag_count  = 50;     ///< 0 = unlimited
     double max_evalue     = 20.0;   ///< 0 = no cutoff
+    /// Multiplier applied to a gapped tag's E-value for RANKING. 1.0 disables it.
+    ///
+    /// Gapped tags are systematically over-scored against contiguous ones: a gap
+    /// edge is chosen as the best fit from a 190-entry two-residue table where an
+    /// ordinary edge tests 19 residues, and it spends one fewer peak to spell one
+    /// more residue. Left uncorrected, gapped tags took 95% of rank-1 slots while
+    /// being 3.6x less likely to be right.
+    ///
+    /// The multiplicity argument gives |pairs|/|residues| = 10 as a LOWER bound.
+    /// Measurement says the real over-scoring is larger: rank-1 accuracy keeps
+    /// improving to ~100 and is flat above it, consistently across all four
+    /// benchmark profiles and tag lengths 3-5 (bench/benchmark.cpp). 100 is
+    /// therefore calibrated, not derived -- and calibrated on synthetic spectra,
+    /// which is the weakest part of the claim. It is a knob for that reason.
+    ///
+    /// Ranking only: the E-value cutoff is applied to the UNCORRECTED value, so
+    /// this never removes a tag, only reorders. See tagSpectrum().
+    double gap_penalty    = 100.0;
     unsigned seed         = 20080717u;  ///< the m/z-fidelity null is Monte Carlo
     int    mzfidelity_samples = 10000;
   };

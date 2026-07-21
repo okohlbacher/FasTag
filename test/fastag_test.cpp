@@ -511,6 +511,88 @@ int main()
                 at_edge, TL, past_edge, TL + 1);
   }
 
+  // 13. the gap penalty REORDERS but never removes a tag
+  //
+  // The invariant that protects sensitivity. Tagging is a prefilter, so the
+  // penalty must change which tag is tried first and nothing else. When it was
+  // first applied it also gated the E-value cutoff, and total recall fell from
+  // 71.3% to 51.9% on the astral benchmark profile -- gapped tags were not
+  // demoted but deleted. That is the regression this guards.
+  //
+  // Asserts BOTH halves: the tag sets must be equal, and the orders must differ.
+  // Without the second half a penalty that did nothing at all would pass.
+  {
+    const std::string pep = "VGAHAGEYGAEALER";
+    const AASequence aa = AASequence::fromString(pep);
+    double pmz = 0;
+    synth(pep, 0, 1, pmz);
+
+    MSSpectrum y;
+    for (size_t i = 1; i < aa.size(); ++i)
+      y.emplace_back(aa.getSuffix(i).getMonoWeight(Residue::YIon, 1), 0.5 + 0.02 * i);
+    const double drop = aa.getSuffix(6).getMonoWeight(Residue::YIon, 1);
+    MSSpectrum holed;
+    for (const auto& pk : y) if (std::fabs(pk.getMZ() - drop) > 1e-6) holed.push_back(pk);
+    holed.sortByPosition();
+
+    // A cutoff must be ACTIVE for this test to mean anything: with max_evalue 0
+    // nothing can be filtered out and the set equality holds trivially.
+    FasTag::Param base;
+    base.frag_tol = 0.02; base.tol_ppm = false; base.complement_tol = 0.02;
+    base.tag_length = 6; base.max_gaps = 1; base.max_tag_count = 0;
+    base.max_evalue = 20.0;
+
+    FasTag::Param flat = base; flat.gap_penalty = 1.0;
+    FasTag::Param pen  = base; pen.gap_penalty = 100.0;
+    const FasTag::Tables tf(flat), tp(pen);
+
+    const auto a = FasTag::tagSpectrum(holed, pmz, 2, flat, tf);
+    const auto b = FasTag::tagSpectrum(holed, pmz, 2, pen, tp);
+
+    auto keys = [](const std::vector<FasTag::Tag>& v) {
+      std::vector<std::string> k;
+      for (const auto& t : v) k.push_back(t.seq);
+      return k;
+    };
+    std::vector<std::string> ka = keys(a), kb = keys(b);
+    const bool order_differs = ka != kb;
+    std::sort(ka.begin(), ka.end());
+    std::sort(kb.begin(), kb.end());
+
+    CHECK(!a.empty() && !b.empty(), "no tags produced; test asserts nothing");
+    CHECK(ka == kb, "gap penalty changed the tag SET (%zu vs %zu tags) -- it must "
+          "reorder only, or sensitivity is lost", a.size(), b.size());
+    CHECK(order_differs, "gap penalty changed nothing at all; either it is not "
+          "applied or this spectrum has no gapped tags to demote");
+
+    size_t gapped = 0;
+    for (const auto& t : a) if (t.gapped) ++gapped;
+    CHECK(gapped > 0, "no gapped tags here, so the penalty is untested");
+    std::printf("13. gap penalty reorders only: %zu tags both ways, %zu gapped, "
+                "order changed=%d\n", a.size(), gapped, order_differs ? 1 : 0);
+  }
+
+  // 14. deisotoping must survive an ion-trap tolerance
+  //
+  // OpenMS's deisotoper throws above 100 ppm or 0.1 Da, and FasTag passed the
+  // fragment tolerance straight through -- so `-deisotope` at the 0.3 Da an ion
+  // trap needs killed the tool with an uncaught exception. The combination is
+  // reachable by following doc/TEST-DATA.md, which names 0.3 Da for the Eclipse
+  // benchmark file.
+  {
+    double pmz = 0;
+    const MSSpectrum s = synth("VGAHAGEYGAEALER", 40, 5, pmz);
+    FasTag::Param p;
+    p.frag_tol = 0.3; p.tol_ppm = false; p.complement_tol = 0.3;
+    p.deisotope = true; p.tag_length = 3;
+    const FasTag::Tables tab(p);
+    bool threw = false;
+    try { FasTag::tagSpectrum(s, pmz, 2, p, tab); }
+    catch (...) { threw = true; }
+    CHECK(!threw, "deisotoping threw at a 0.3 Da fragment tolerance");
+    std::printf("14. deisotope at 0.3 Da (ion trap): no exception\n");
+  }
+
   std::printf(failures ? "\n%d FAILURES\n" : "\nall checks passed\n", failures);
   return failures ? 1 : 0;
 }

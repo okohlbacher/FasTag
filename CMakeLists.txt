@@ -141,6 +141,12 @@ if(_fastag_mzpeak)
 endif()
 install(TARGETS FasTag RUNTIME DESTINATION bin)
 
+option(FASTAG_BUILD_BENCH "Build the synthetic benchmark" ON)
+if(FASTAG_BUILD_BENCH)
+  add_executable(benchmark bench/benchmark.cpp)
+  target_link_libraries(benchmark PRIVATE fastag_core)
+endif()
+
 option(FASTAG_BUILD_TESTS "Build tests" ON)
 if(FASTAG_BUILD_TESTS)
   enable_testing()

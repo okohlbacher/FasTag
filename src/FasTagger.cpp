@@ -367,8 +367,25 @@ namespace FasTag
       // count is left to the cap below, hence number_of_final_peaks = 0.
       if (p.deisotope && work.size() > 2)
       {
+        // Clamp to what the deisotoper accepts.
+        //
+        // OpenMS throws IllegalArgument above 100 ppm or 0.1 Da, and FasTag
+        // passed the fragment tolerance straight through -- so `-deisotope` with
+        // an ion-trap tolerance CRASHED the tool with an uncaught exception. Not
+        // hypothetical: 0.3 Da is the correct setting for the Eclipse benchmark
+        // file (doc/TEST-DATA.md), so the combination is one a user reaches by
+        // following the documentation. Found by bench/benchmark.cpp's iontrap
+        // profile, which is the reason that profile exists.
+        //
+        // Clamping is the conservative direction. A tolerance tighter than the
+        // data warrants makes the deisotoper collapse FEWER clusters, leaving
+        // extra isotope peaks in the spectrum; it never merges peaks that are
+        // not isotopes. Skipping deisotoping entirely would silently ignore an
+        // option the user explicitly asked for, which is worse.
+        const double deiso_tol = p.tol_ppm ? std::min(p.frag_tol, 100.0)
+                                           : std::min(p.frag_tol, 0.1);
         Deisotoper::deisotopeWithAveragineModel(
-            work, p.frag_tol, p.tol_ppm,
+            work, deiso_tol, p.tol_ppm,
             0,                                        // no peak cap here
             1, std::max(1, p.deisotope_max_charge),
             false,                                    // keep_only_deisotoped
@@ -871,7 +888,33 @@ namespace FasTag
 
     // E-value: expected number of tags this good by chance. Valid under arbitrary
     // dependence between tags, by linearity of expectation.
-    for (Tag& t : scored) t.evalue *= static_cast<double>(std::max<size_t>(n_seeds, 1));
+    //
+    // Gapped tags additionally pay for the larger space their gap searched. An
+    // ordinary edge tests ONE residue mass and follows every peak that matches;
+    // a gap edge tests the whole 190-entry two-residue table and keeps the best
+    // fit. So a gapped path is drawn from a hypothesis space ~|pairs|/|residues|
+    // = 10x larger per gap, and its p-value is optimistic by about that factor
+    // while the null is built for a free draw.
+    //
+    // n_seeds cannot fix this: it is one global factor applied to every tag from
+    // the spectrum, so it moves the whole list and never reorders it. The
+    // distortion is WITHIN a spectrum -- gapped tags outranking contiguous ones
+    // they should sit below -- which only a per-family term can correct.
+    //
+    // Measured (bench/benchmark.cpp, astral profile, TL=4): a gapped tag holding
+    // rank 1 read the true peptide 16.1% of the time against 58.2% for a
+    // contiguous one, and enabling gaps drove rank-1 accuracy DOWN from 24.3% to
+    // 17.7% while more than doubling total recall. The tags were being found and
+    // then buried by their own competitors.
+    //
+    // Exactly one gap is possible per tag today (the DFS sets gap_used and
+    // extension does not cross gaps), so this applies once rather than per gap.
+    const double gap_penalty = std::max(1.0, p.gap_penalty);
+    for (Tag& t : scored)
+    {
+      t.evalue *= static_cast<double>(std::max<size_t>(n_seeds, 1));
+      if (t.gapped) t.evalue *= gap_penalty;
+    }
 
     // stable_sort, not sort: the comparator is not total (it ignores charge and
     // the flanks), and 99.4% of duplicate groups are identical in every emitted
@@ -895,7 +938,33 @@ namespace FasTag
     std::set<std::tuple<std::string, int, double, double>> seen;
     for (Tag& t : scored)
     {
-      if (p.max_evalue > 0 && t.evalue > p.max_evalue) break;
+      // The gap penalty ORDERS but does not FILTER.
+      //
+      // It is a ranking correction, and letting it also gate membership turns a
+      // 7-point rank-1 gain into a 20-point recall loss: at the default cutoff it
+      // took total recall from 71.3% to 51.9% on the astral profile, because
+      // gapped tags were not demoted but deleted. With the cutoff lifted, the
+      // same penalty leaves recall bit-identical (81.4%, 208.8 tags/spectrum
+      // either way) and moves rank-1 from 17.8% to 25.5% -- pure reordering,
+      // which is all it was ever meant to be.
+      //
+      // Tagging is a sensitive prefilter; specificity is added by later stages.
+      // So the cutoff answers "is this worth reporting at all" on the uncorrected
+      // evidence, while the E-value answers "which should be tried first". There
+      // is no reason one number must serve both, and here it must not.
+      //
+      // Exact, not approximate: at most one gap per tag, so dividing recovers the
+      // pre-penalty value bit for bit. `continue` rather than `break` because the
+      // list is sorted by the CORRECTED value, so uncorrected values along it are
+      // not monotone and an early exit would drop tags that belong.
+      // Early exit is still sound, just at a looser bound: the list is sorted by
+      // corrected E-value, and the largest possible discount is gap_penalty, so
+      // once the corrected value passes max_evalue * gap_penalty nothing after it
+      // can survive either. Without this the loop would scan every scored path on
+      // every spectrum -- correct, but it gives back the early exit for nothing.
+      if (p.max_evalue > 0 && t.evalue > p.max_evalue * gap_penalty) break;
+      const double raw = t.gapped ? t.evalue / gap_penalty : t.evalue;
+      if (p.max_evalue > 0 && raw > p.max_evalue) continue;
       if (!seen.emplace(t.seq, t.charge, t.nterm_mass, t.cterm_mass).second) continue;
       out.push_back(std::move(t));
       if (p.max_tag_count > 0 && static_cast<int>(out.size()) >= p.max_tag_count) break;

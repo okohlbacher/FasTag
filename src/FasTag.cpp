@@ -198,6 +198,13 @@ protected:
     setMinInt_("max_tags", 0);
     registerDoubleOption_("max_evalue", "<value>", 20.0, "E-value cutoff; 0 disables", false);
     setMinFloat_("max_evalue", 0.0);
+    registerDoubleOption_("gap_penalty", "<value>", 100.0,
+                          "Rank gapped tags as if their E-value were this many times "
+                          "worse. Affects ORDER only, never which tags are reported. "
+                          "1 disables. Gapped tags are otherwise heavily over-ranked: "
+                          "they take ~95% of top-1 slots while being ~3.6x less likely "
+                          "to be correct", false);
+    setMinFloat_("gap_penalty", 1.0);
 
     registerDoubleOption_("isobaric_tolerance", "<value>", 0.04,
                           "When matching against 'fasta', treat a residue as interchangeable "
@@ -230,6 +237,7 @@ protected:
     p.max_peak_count = static_cast<size_t>(getIntOption_("max_peaks"));
     p.max_tag_count = getIntOption_("max_tags");
     p.max_evalue = getDoubleOption_("max_evalue");
+    p.gap_penalty = getDoubleOption_("gap_penalty");
 
     // Unconditional: the realised length bounds the null tables whether or not a
     // FASTA filter is in use.
