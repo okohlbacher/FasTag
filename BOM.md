@@ -1,6 +1,8 @@
 # Bill of Materials
 
-FasTag v0.2.0 · MIT · <https://github.com/okohlbacher/FasTag>
+FasTag v0.3.0 · MIT · <https://github.com/okohlbacher/FasTag>
+
+Input and output are mzML. mzPeak is designed but not built; see doc/BACKLOG.md.
 
 ## Direct dependencies
 
@@ -23,6 +25,8 @@ not already require. There is no vendored third-party source in this repository.
 | mzML read and write | `FileHandler::loadExperiment` / `storeExperiment` |
 | FASTA parsing | `FASTAFile::load` |
 | Spectra, peaks, precursors | `MSExperiment`, `MSSpectrum`, `Peak1D`, `Precursor` |
+| Streaming mzML reads, bounded memory | `OnDiscMSExperiment` (one reader per thread; the class is not thread-safe) |
+| Isotope-cluster collapse (`-deisotope`) | `Deisotoper::deisotopeWithAveragineModel` |
 | CLI, INI files, logging, citations | `TOPPBase` |
 | χ² survival function | `boost::math::chi_squared` |
 | Hypergeometric tail | `boost::math::hypergeometric_distribution` |
@@ -52,6 +56,16 @@ FasTag is not a derivative work of it: the scoring nulls, the tag enumerator and
 the data structures are independently written, and several deliberately differ
 (exact hypergeometric instead of a tabulated MVH; Fisher DOF from the number of
 active subscores rather than from a sum of weights).
+
+## Optional, not linked
+
+| Component | Licence | Why |
+|---|---|---|
+| OpenMS patch `feature/ondisc-metadata-from-block` | BSD-3-Clause | Removes a serial metadata pass that is ~55 s of a 60 s run and caps thread scaling at 16. FasTag detects its absence and falls back correctly, so this is a performance dependency, not a functional one. See doc/OPENMS-FAST-READER.md. |
+
+Benchmark data preparation used ThermoRawFileParser (Apache-2.0) and BRFP for
+vendor-format conversion. Neither is linked, called, or required to build or run
+FasTag; both produce the mzML that FasTag consumes.
 
 ## Build-time only
 
