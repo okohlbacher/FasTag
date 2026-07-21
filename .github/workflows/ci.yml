@@ -40,12 +40,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # libboost-headers is not optional and not implied. bioconda's openms
+      # package ships OpenMS/config.h, which does
+      # #include <boost/current_function.hpp> -- so every downstream translation
+      # unit needs Boost headers, but the package does not depend on them. Any
+      # consumer of that package hits this immediately; a local build only avoids
+      # it because contrib put Boost there already.
       - name: Install OpenMS from bioconda
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: fastag
           create-args: >-
             openms>=3.5
+            libboost-headers
             cmake
             ninja
             cxx-compiler
