@@ -103,8 +103,9 @@ endif()
 if(_fastag_mzpeak)
   message(STATUS "FasTag: mzPeak input available (-in accepts .mzpeak)")
 else()
-  message(STATUS "FasTag: mzPeak input NOT available -- this OpenMS has no "
-                 "MzPeakFile. mzML input is unaffected.")
+  message(STATUS "FasTag: mzPeak input NOT available -- this OpenMS lacks "
+                 "MzPeakFile or a MZPEAK entry in FileTypes. mzML input is "
+                 "unaffected.")
 endif()
 
 # OpenMP, declared rather than inherited.
