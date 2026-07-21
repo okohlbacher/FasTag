@@ -19,9 +19,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+# cancel-in-progress is deliberately OFF.
+#
+# It is the usual default and it starved a job here. macos-13 is the last Intel
+# runner and is scarce, so macos-x64 sat queued while every subsequent push
+# cancelled the run out from under it -- across six consecutive runs it never
+# executed once, and an untested platform sat in the matrix looking merely
+# "queued" rather than unverified.
+#
+# This repo does not have the traffic to need aggressive cancellation, and a
+# stale run finishing is cheaper than a platform silently never being built.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------- conda path
@@ -150,14 +160,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: windows-x64,   runner: windows-2022 }
-          - { name: windows-arm64, runner: windows-11-arm }
+          - { name: windows-x64,   runner: windows-2022,   arch: amd64 }
+          - { name: windows-arm64, runner: windows-11-arm, arch: arm64 }
 
     env:
       OPENMS_TAG: release/3.5.0
 
     steps:
       - uses: actions/checkout@v4
+
+      # OpenMS contrib needs the MSVC developer environment, not merely a
+      # compiler CMake can find. Its CMakeLists shells out to cl.exe to decide
+      # the target word size and fails with "Could not determine if cl.exe builds
+      # x86 or x64 apps" when cl is not on PATH -- which is the state a bare
+      # cmake invocation leaves it in, even though CMake itself locates MSVC.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
 
       - name: Cache the OpenMS build
         id: openms-cache
