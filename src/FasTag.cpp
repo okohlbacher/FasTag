@@ -108,6 +108,11 @@ protected:
     registerIntOption_("max_peaks", "<n>", 100,
                        "Peaks retained per spectrum; 0 = keep all", false);
     setMinInt_("max_peaks", 0);
+    registerIntOption_("peaks_per_window", "<n>", 0,
+                       "Keep this many peaks per 100 Da window instead of the "
+                       "strongest 'max_peaks' overall; 0 disables. Scales the "
+                       "effective peak budget with the spectrum's m/z range", false);
+    setMinInt_("peaks_per_window", 0);
     registerIntOption_("max_tags", "<n>", 50, "Tags reported per spectrum; 0 = unlimited", false);
     setMinInt_("max_tags", 0);
     registerDoubleOption_("max_evalue", "<value>", 20.0, "E-value cutoff; 0 disables", false);
@@ -138,6 +143,7 @@ protected:
     p.max_extension = getIntOption_("extension");
     p.max_gaps = getIntOption_("gaps");
     p.deisotope = getFlag_("deisotope");
+    p.peaks_per_window = getIntOption_("peaks_per_window");
     p.frag_tol = getDoubleOption_("fragment_tolerance");
     p.tol_ppm = getStringOption_("fragment_tolerance_unit") == "ppm";
     p.max_peak_count = static_cast<size_t>(getIntOption_("max_peaks"));

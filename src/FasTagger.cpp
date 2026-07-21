@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <map>
 #include <set>
 #include <tuple>
 #include <random>
@@ -27,6 +28,11 @@ namespace FasTag
   /// intensityP() returns 1.0 above the table extent, silently disabling the
   /// intensity subscore rather than erroring.
   static constexpr size_t PEAK_CEILING = 1024;
+
+  /// Width of the selection window in Da. Fixed rather than exposed: it only
+  /// sets the granularity at which the quota is applied, and the quota itself is
+  /// the knob worth turning.
+  static constexpr double PEAK_WINDOW_MZ = 100.0;
 
   /// Cap on spellings emitted for one gap. At the tolerances this tool is used
   /// at the real count is 1 composition x 2 orders; the cap only stops a
@@ -380,7 +386,43 @@ namespace FasTag
       // lose a third of the scoring on any spectrum with more peaks than the
       // tables cover. Both places must agree on the same ceiling.
       const size_t cap = p.max_peak_count > 0 ? p.max_peak_count : PEAK_CEILING;
-      if (order.size() > cap) order.resize(cap);
+
+      // Windowed selection: keep the strongest peaks_per_window peaks in each
+      // PEAK_WINDOW_MZ-wide slice, instead of the strongest N overall.
+      //
+      // A global top-N is a fixed budget, and the right budget is not a constant:
+      // it depends on how many real fragments a spectrum has, which scales with
+      // the peptide. Measured on 500-peak diaTracer spectra, raising the cap from
+      // 100 to 500 gained 56% more spectra with a correctly placed tag -- so the
+      // default was starving dense spectra. But simply raising it would starve
+      // them differently on any data that is not this dense, and would let one
+      // intense region spend the whole budget.
+      //
+      // A per-window quota scales the effective total with the m/z range the
+      // spectrum actually covers, which tracks precursor mass, and it spreads
+      // selection across the range so a single dominant region cannot crowd out
+      // a whole series. Sparse spectra keep everything they have.
+      //
+      // order is sorted by (intensity desc, m/z desc), so walking it in order and
+      // admitting a peak when its window still has room selects exactly the
+      // strongest per window while keeping the existing total order for ranks.
+      if (p.peaks_per_window > 0)
+      {
+        std::map<long, int> used;
+        std::vector<size_t> keep;
+        keep.reserve(std::min(order.size(), cap));
+        for (size_t i : order)
+        {
+          const long w = static_cast<long>(work[i].getMZ() / PEAK_WINDOW_MZ);
+          int& n = used[w];
+          if (n >= p.peaks_per_window) continue;
+          ++n;
+          keep.push_back(i);
+          if (keep.size() >= cap) break;   // cap remains a hard ceiling
+        }
+        order.swap(keep);
+      }
+      else if (order.size() > cap) order.resize(cap);
 
       // Keep the rank alongside the peak, then restore m/z order: the graph and
       // findNearest both need a sorted spectrum.

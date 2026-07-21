@@ -35,7 +35,11 @@ namespace FasTag
     bool   tol_ppm        = true;
     double complement_tol = 0.02;   ///< always absolute; complements span the whole range
     double precursor_tol  = 1.5;
-    size_t max_peak_count = 100;
+    size_t max_peak_count = 100;   ///< hard ceiling; also bounds the null tables
+    /// Peaks kept per 100 Da window; 0 selects the strongest max_peak_count
+    /// overall instead. Windowed selection makes the effective budget scale with
+    /// the spectrum's own m/z range rather than being a constant.
+    int    peaks_per_window = 0;
     int    max_tag_count  = 50;     ///< 0 = unlimited
     double max_evalue     = 20.0;   ///< 0 = no cutoff
     unsigned seed         = 20080717u;  ///< the m/z-fidelity null is Monte Carlo
