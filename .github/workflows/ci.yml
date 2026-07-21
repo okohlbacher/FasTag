@@ -40,12 +40,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # libboost-headers is not optional and not implied. bioconda's openms
-      # package ships OpenMS/config.h, which does
-      # #include <boost/current_function.hpp> -- so every downstream translation
-      # unit needs Boost headers, but the package does not depend on them. Any
-      # consumer of that package hits this immediately; a local build only avoids
-      # it because contrib put Boost there already.
+      # Two dependencies OpenMSConfig.cmake needs but the openms package does not
+      # pull in. Both were invisible locally, where contrib had already provided
+      # them, and both broke immediately on a clean machine:
+      #
+      #   libboost-headers  OpenMS/config.h is public and does
+      #                     #include <boost/current_function.hpp>, so every
+      #                     downstream translation unit needs Boost headers
+      #   qt6-main          OpenMSConfig.cmake does find_dependency(Qt6). The
+      #                     env otherwise has a Qt6Config.cmake that sets
+      #                     Qt6_FOUND=FALSE -- present but incomplete, which
+      #                     reads as a confusing "found but not found"
+      #
+      # linux-x64 passed without qt6-main and the ARM/macOS runners did not, so
+      # the base image differs by platform. Requesting it explicitly removes the
+      # dependence on whatever the runner happens to ship.
       - name: Install OpenMS from bioconda
         uses: mamba-org/setup-micromamba@v2
         with:
@@ -53,6 +62,7 @@ jobs:
           create-args: >-
             openms>=3.5
             libboost-headers
+            qt6-main
             cmake
             ninja
             cxx-compiler
