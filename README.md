@@ -248,23 +248,55 @@ space, not as a statistically sampled benchmark.
 
 `ctest` covers the rank-sum DP against exhaustive enumeration, end-to-end tag
 recovery from synthetic spectra, flanking-mass placement, extension, gap ordering
-with a negative control, per-row mass closure, determinism, and the sequence
-filter.
+with a negative control, per-row mass closure, determinism, the sequence filter,
+and that `-gap_penalty` reorders without ever removing a tag.
+
+### Ranking, and the synthetic benchmark
+
+The Sage measurement above answers "was a correct tag found". It cannot answer
+"was it found **first**", because PSM truth is per spectrum, not per tag — and
+that blind spot hid a real defect for months.
+
+`bench/benchmark.cpp` closes it: synthetic spectra with exact per-tag truth,
+generated from four profiles fitted to the real cornerstones' peak count and
+ladder edge density (see [doc/TEST-DATA.md](doc/TEST-DATA.md)). It needs no
+external data and runs in seconds.
+
+It found that gapped tags took **95% of rank-1 slots while being 3.6× less likely
+to be correct**, so enabling gaps made the single best tag worse even as it
+doubled total recall. `-gap_penalty` (default 100) fixes the ordering:
+
+| astral profile, TL=4 | rank-1 | top-5 | total recall |
+|---|---|---|---|
+| `-gaps 1 -gap_penalty 1` | 17.7% | 47.7% | 71.3% |
+| `-gaps 1` (default 100) | **28.6%** | **52.2%** | 71.5% |
+
+Consistent across all four profiles and tag lengths 3–5. On real ddaPASEF the
+tag set is byte-identical either way — 4,993,319 tags over 287,382 spectra —
+while the rank-1 gapped share falls 96.4% → 76.7%. The penalty **reorders and
+never filters**, which is what keeps a sensitive prefilter sensitive.
+
+It also found an uncaught exception: `-deisotope` at an ion-trap tolerance
+crashed the tool, a combination reachable straight from the docs.
 
 ## Known limitations
 
-- **Gapped tags are overranked.** Rank-1 recall is 81.5% for contiguous tags but
-  33.3% with `-gaps 1`, and gaps make the single best tag *worse*. A gap's mass is
-  a minimum over ~190 candidate pairs and the null does not price that, so
-  E-values are not comparable across gapped and contiguous tags. Use the top-N
-  list, not the top-1, when gaps are on.
+- **`-gap_penalty`'s default is calibrated, not derived.** It rests on synthetic
+  spectra this project wrote to test itself. The multiplicity argument justifies
+  only ~10 of the 100; measurement says the real over-scoring is larger but gives
+  no clean optimum. Within the gapped family the E-value still carries almost no
+  information about correctness. Real ground truth would settle it —
+  [doc/BACKLOG.md](doc/BACKLOG.md).
+- **The Sage ground truth is no longer reproducible here.** The PSM table, the
+  S23 file and the Sage binary are all gone from the machine those numbers were
+  measured on. They stand as recorded; they cannot currently be extended.
 - **Defaults are conservative.** `-deisotope`, `-gaps` and `-peaks_per_window`
   are all off. Their measured gains come from one acquisition type, and the peak
   cap in particular was tuned on data whose peak count is clamped flat at 500.
 - **No modification support.** Residues are the unmodified 19, so labelled
   samples (TMT and similar) will not match tags spanning a modified residue.
-- **mzML only.** mzPeak input is designed but not built — see
-  [doc/BACKLOG.md](doc/BACKLOG.md).
+- **mzPeak input is not memory-bounded** and is not covered by CI, which builds
+  against a stock OpenMS that lacks the file handler. mzML is the tested path.
 
 ## Licence and provenance
 

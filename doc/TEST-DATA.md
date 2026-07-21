@@ -68,9 +68,54 @@ file's own metadata, not from a catalogue — see the Eclipse entry for why.
   only pair whose peak density genuinely varies, so the only one that can test
   whether a peak budget generalises.
 - **4** is the low-resolution cornerstone. Every other file is high-res; without
-  one ion-trap acquisition the tolerance-mismatch failure mode is invisible.
-- **1** additionally has 14,867 Sage PSMs at 1% FDR as ground truth, which is
-  what every recall number in the README is measured against.
+  one ion-trap acquisition the tolerance-mismatch failure mode is invisible. It
+  earned its place immediately: the `iontrap` profile derived from it exposed an
+  uncaught exception in `-deisotope` at 0.3 Da.
+
+### The Sage ground truth is GONE
+
+File 1 previously had 14,867 Sage PSMs at 1% FDR, and every recall figure in the
+README's history was measured against it. **Neither the PSM table, the S23 mzML,
+nor the Sage binary is on this machine any more.** Those numbers can no longer be
+reproduced or extended here, which is precisely why tier 3 below exists.
+
+Regenerating it needs: Sage 0.14.7, a human FASTA with reversed decoys, the S23
+diaTracer output, and the precursor-injection fix described in
+`vault/03-Design/SAGE-Tag-Confirmation.md` (Sage refuses the file otherwise).
+
+## Tier 3 — synthetic benchmark (in-repo, exact truth)
+
+`bench/benchmark.cpp`. The answer to tier 2's fragility: a seed and a profile,
+no external data, exact **per-tag** truth.
+
+```bash
+benchmark stats  <file.mzML> [tol] [ppm|da]   # measure a real acquisition
+benchmark synthstats <profile>                # same statistics, generated
+benchmark synth  <profile> [n] [TL] [gaps] [ext] [peaks] [gap_penalty]
+```
+
+Four profiles, one per cornerstone. Each is **fitted** so `synthstats` lands on
+what `stats` measures on the real file — peak count and ladder edge density, the
+one structural property tagging consumes that needs no identifications:
+
+| profile | peaks/MS2 real → synth | ladder real → synth |
+|---|---|---|
+| astral | 1337 → 1395 | 69.4% → 75.2% |
+| ddapasef | 140 → 147 | 38.5% → 35.7% |
+| diatracer | ~500 → 447 | anchored to doc, not re-measured |
+| iontrap | 267 → 215 | 79.2% → 78.8% |
+
+**What it is for**: ranking. PSM truth is per *spectrum*, so it can say a correct
+tag was found but never whether it was found *first*. Per-tag truth can, and
+rank-1 accuracy is where the gapped-tag defect lived — invisible for months
+because nothing measured it.
+
+**What it is not**: real data. It cannot discover a failure mode the generator
+does not model, and its profiles are fitted to two summary statistics, which is
+not the same as reproducing a spectrum. `-gap_penalty`'s default of 100 is
+calibrated on it and is the weakest-supported number in the tool. Real-data
+validation is still required for anything that matters; what the benchmark buys
+is that a regression in ranking now fails in seconds instead of never.
 
 ### Reproducing a measurement
 
@@ -79,12 +124,17 @@ FasTag -in <file> -out tags.tsv -tag_length 6 -threads N \
        -fragment_tolerance <see table> -fragment_tolerance_unit <ppm|Da>
 ```
 
-Ground-truth recall counts spectra gaining a correctly placed tag: a tag is
-correct if its sequence occurs in the Sage-identified peptide at a position whose
-prefix mass matches `nterm_mass` (y-derived), or whose reverse matches with
-`cterm_mass + H2O` (b-derived), within 0.05 Da.
+Ground-truth recall counted spectra gaining a correctly placed tag: a tag was
+correct if its sequence occurred in the Sage-identified peptide at a position
+whose prefix mass matched `nterm_mass` (y-derived), or whose reverse matched with
+`cterm_mass + H2O` (b-derived), within 0.05 Da. Kept here for whoever regenerates
+the PSMs.
 
-### Known gap
+### Known gaps
 
-No test, in either tier, exercises `-out_spectra`. It is the one output path
-with no coverage.
+- No test, in any tier, exercises `-out_spectra`. It is the one output path with
+  no coverage.
+- Tier 3 gates nothing in CI yet. It builds there; it is not run.
+- The `diatracer` profile is the only one fitted to a document rather than to a
+  file, because the file is gone. Treat its absolute numbers with suspicion; it
+  is still useful for A/B comparisons, which is how it has been used.

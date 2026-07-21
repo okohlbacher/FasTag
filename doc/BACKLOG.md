@@ -66,18 +66,44 @@ Revisit when the format stabilises and `MzPeakFile` lands in mainline. The cheap
 first step, whenever that is: round-trip a benchmark mzML through
 `MzPeakFile::store` and back, and confirm precursor m/z and charge survive.
 
-## Gapped tags are overranked
+## Gapped tags were overranked — FIXED, with a caveat
 
-Rank-1 recall is 81.5% for contiguous tags against 33.3% with `-gaps 1`, and
-enabling gaps makes the single best tag *worse* in absolute terms (2,836 to
-1,676 spectra). The mechanism is understood: a gap's mass is the minimum over
-~190 candidate pairs, and the m/z-fidelity null prices it as though it were one
-free measurement, so gapped tags are systematically flattered.
+`-gap_penalty` (default 100) multiplies a gapped tag's E-value for **ranking
+only**; the cutoff still sees the uncorrected value, so no tag is ever removed.
+Rank-1 accuracy improved in all 12 profile × tag-length cells of
+`bench/benchmark.cpp`, and on real ddaPASEF the tag set is byte-identical while
+the rank-1 gapped share falls 96.4% → 76.7%.
 
-A proper fix needs a decoy-calibrated gap penalty, or scoring the two families
-separately before they compete for the per-spectrum quota. Both are research, not
-patches. Until then the feature is off by default and the README says to consume
-the top-N list rather than the top-1 when gaps are on.
+**The caveat**: 100 is calibrated on synthetic spectra, not derived. The
+multiplicity argument (a gap edge picks from 190 pairs where an ordinary edge
+tests 19 residues) justifies only ~10; measurement says the true over-scoring is
+roughly an order of magnitude larger, and rank-1 accuracy is still creeping up at
+500. The curve has no clean optimum, which is the signature of "just rank all
+contiguous tags above all gapped ones" — near enough true, since a contiguous
+rank-1 tag is right ~55% of the time against ~15% for a gapped one.
+
+Worth revisiting **only with real ground truth**. Regenerating the Sage PSMs (see
+`TEST-DATA.md`) is the prerequisite; until then this constant rests on a
+generator this project wrote to test itself, which is a real limitation.
+
+Related, and unfixed: within the gapped family the E-value carries almost no
+information about correctness — r1-gapped accuracy sits at 15-20% regardless of
+penalty. Pushing the family down helps; ordering *inside* it does not seem to.
+
+## Gap-crossing extension — MEASURED, rejected
+
+Task "rework gaps as merge semantics" is closed on the evidence. Extension
+crossing a hole was implemented fully (reverse gap edges, shared gap budget, gap
+tried only where no ordinary edge continues) and lost in all six cells tested:
+rank-1 down up to 13.1 points at extension 4, with **zero** recall gain. See the
+comment on `extendPath` for the numbers. The stale `wip/gap-merge` branch is
+superseded and would revert a large amount of later work if merged; it is kept
+only as provenance.
+
+Subsumption (collapsing a contiguous tag into a gapped superset) was **not**
+implemented. Its motivation was reducing redundancy between the two families,
+which `-gap_penalty` now addresses more directly by separating them in the
+ranking. Reconsider only if redundancy is shown to cost something measurable.
 
 ## Peak-cap defaults rest on one acquisition type
 

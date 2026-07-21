@@ -669,11 +669,29 @@ namespace FasTag
     /// on better intensity rank, then peak index -- all three are needed, since
     /// ties at equal error are common and a partial order leaves the output
     /// dependent on traversal accidents.
+    ///
     /// Extension deliberately walks ordinary edges only, even when the seed
     /// carries no gap. A gap here would let one tag rest on two unobserved
     /// splits at opposite ends, and the sequence it spells would be mostly
     /// inference; the seed-level gap already reaches the disjoint runs this is
-    /// meant to recover. Revisit only with a measurement that says it pays.
+    /// meant to recover.
+    ///
+    /// MEASURED, and it does not pay. Implemented in full -- reverse gap edges, a
+    /// gap budget shared across both termini, gap tried only where no ordinary
+    /// edge continues -- and benchmarked against this version on three profiles at
+    /// extension 2 and 4. Rank-1 accuracy fell in all six cells, by 4.6 points at
+    /// extension 2 and up to 13.1 at extension 4, and TOTAL RECALL DID NOT MOVE:
+    ///
+    ///   ddapasef  ext=4   rank-1 37.9% -> 24.8%,  any 80.6% -> 80.6%
+    ///   diatracer ext=4   rank-1 35.3% -> 22.2%,  any 77.8% -> 77.2%
+    ///   astral    ext=4   rank-1 22.4% -> 15.6%,  any 60.6% -> 60.2%
+    ///
+    /// Zero recall gain is the informative part: a gapped extension reaches no
+    /// peptide the seed gap had not already reached. It only converts contiguous
+    /// tags into gapped ones, which are ~3.6x less likely to be correct, and the
+    /// damage grows with extension length as more of the tag becomes inference.
+    ///
+    /// Do not reimplement without a measurement that contradicts this one.
     int extendPath(const Prepared& s, const Param& p, const Graph& g,
                    std::vector<uint32_t>& peaks, std::vector<Step>& path,
                    int charge, bool forward)

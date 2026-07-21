@@ -504,5 +504,19 @@ int main(int argc, char** argv)
               "", "spectra", "rank1", "top5", "any", "tagprec",
               "r1-contig", "r1-gapped", "tags/sp");
   report("result", sc);
+
+  // Exit non-zero on an obviously broken run, so ctest can gate on this.
+  //
+  // Deliberately a floor, not a threshold on accuracy: pinning a quality number
+  // would make every scoring change a CI failure and train people to edit the
+  // expectation. What this catches is the tool falling over or going silent on a
+  // whole acquisition class -- which is exactly what happened when `-deisotope`
+  // threw on the iontrap profile.
+  if (sc.tagged == 0)
+  {
+    std::fprintf(stderr, "FAIL: profile %s produced no tags on any of %d spectra\n",
+                 pf->name, n_spec);
+    return 1;
+  }
   return 0;
 }

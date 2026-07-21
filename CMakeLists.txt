@@ -155,4 +155,18 @@ if(FASTAG_BUILD_TESTS)
     target_link_libraries(${t} PRIVATE fastag_core)
     add_test(NAME ${t} COMMAND ${t})
   endforeach()
+
+  # One short run per acquisition class, gaps and deisotoping ON.
+  #
+  # These are smoke tests, not quality gates -- the benchmark exits non-zero only
+  # if a profile produces no tags at all. That is deliberately weak, and it is
+  # still the check that would have caught `-deisotope` throwing an uncaught
+  # exception at the 0.3 Da tolerance the iontrap profile uses. Every profile
+  # other than iontrap passed that day.
+  if(FASTAG_BUILD_BENCH)
+    foreach(prof astral ddapasef diatracer iontrap)
+      add_test(NAME bench_${prof}
+               COMMAND benchmark synth ${prof} 150 4 1 2 100)
+    endforeach()
+  endif()
 endif()
