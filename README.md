@@ -10,7 +10,12 @@ faster than the reference implementation on the same hardware, returning 5-8%
 more tags.
 
 Requires **OpenMS >= 3.5**. Verified against 3.5.0 (Linux, gcc-13) and 3.6.0
-(macOS arm64, AppleClang). **Input and output are mzML.**
+(macOS arm64, AppleClang).
+
+**Input is mzML, or [mzPeak](https://github.com/OpenMS/mzpeak) when the OpenMS it
+is built against provides `MzPeakFile`** — configure reports which you have.
+Output is mzML and TSV. Read [the caveat](#mzpeak-input) before pointing mzPeak
+at a large file.
 
 ## What it does
 
@@ -165,6 +170,9 @@ FasTag -in run.mzML -out tags.tsv -deisotope -gaps 1
 
 # only tags occurring in a protein of interest, plus the spectra carrying them
 FasTag -in run.mzML -out tags.tsv -fasta AGXT.fasta -out_spectra hits.mzML
+
+# mzPeak input, if this build has it
+FasTag -in run.mzpeak -out tags.tsv
 ```
 
 One row per tag: sequence, length, fragment charge, N- and C-terminal flanking
@@ -176,6 +184,33 @@ on low-resolution data is silent and looks exactly like bad data — on an ion-t
 file, 20 ppm returned 3,007 tags where 0.3 Da returned 824,959. FasTag infers
 resolution from peak spacing and warns when the two disagree, but it cannot know
 the analyser, so the setting is yours.
+
+### mzPeak input
+
+Available when the OpenMS you build against provides `MzPeakFile`. Configure says
+so:
+
+```
+-- FasTag: mzPeak input available (-in accepts .mzpeak)
+```
+
+Output is byte-identical to the same data as mzML, and identical at every thread
+count. Reading only — `-out_spectra` writes mzML and is refused with mzPeak input.
+
+**It is not memory-bounded, and the cause is upstream.** `MzPeakFile::transform()`
+materialises the run rather than streaming it:
+
+| input | size | peak RSS |
+|---|---|---|
+| .mzpeak | 93 MB | 945 MB |
+| .mzpeak | **2.11 GB** | **23.7 GB** |
+| same data as mzML | — | 169 MB |
+
+~11x the file, against an mzML path that holds O(threads). FasTag's own buffer is
+not the term that matters: varying it over a 16x range moved peak memory under
+10%. **Prefer mzML for large runs** until the upstream reader streams —
+[doc/BACKLOG-mzpeak.md](doc/BACKLOG-mzpeak.md) has the measurements, and
+[doc/DESIGN-ondisc-mzpeak.md](doc/DESIGN-ondisc-mzpeak.md) proposes the fix.
 
 ## Validation
 
