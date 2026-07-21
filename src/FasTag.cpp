@@ -19,6 +19,7 @@
 
 #include <fstream>
 #include <map>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -254,6 +255,54 @@ protected:
       }
     }
     const size_t n_total = streaming ? ondisc.getNrSpectra() : exp.size();
+
+    // Warn when the fragment tolerance looks far too tight for the data.
+    //
+    // A high-resolution tolerance on low-resolution data is silent, and looks
+    // exactly like a bad file. Measured on an ion-trap MS2 run: 3,007 tags at
+    // 20 ppm against 824,959 at 0.3 Da -- a factor of 274, with nothing in the
+    // output to suggest the setting was at fault rather than the spectra.
+    //
+    // The analyser is not read from run-level metadata, because the fast reader
+    // path deliberately does not load it. Infer resolution from the peaks
+    // instead: an ion trap cannot place two peaks closer than roughly 0.2-0.3 Th,
+    // while an Orbitrap or TOF routinely does. If the closest pair anywhere in
+    // the sample is still many times the tolerance, no real fragment can be
+    // matched at that tolerance either.
+    {
+      double tightest = std::numeric_limits<double>::max();
+      double at_mz = 0;
+      const Size want = std::min<Size>(n_total, 200);
+      const Size step = std::max<Size>(1, n_total / std::max<Size>(want, 1));
+      Size seen = 0;
+      for (Size i = 0; i < n_total && seen < want; i += step)
+      {
+        MSSpectrum s = streaming ? ondisc.getSpectrum(i) : exp[i];
+        if (s.getMSLevel() != 2 || s.size() < 8) continue;
+        ++seen;
+        s.sortByPosition();
+        for (Size k = 1; k < s.size(); ++k)
+        {
+          const double d = s[k].getMZ() - s[k - 1].getMZ();
+          if (d > 0 && d < tightest) { tightest = d; at_mz = s[k].getMZ(); }
+        }
+      }
+      if (at_mz > 0)
+      {
+        const double tol = p.tol_ppm ? at_mz * p.frag_tol * 1e-6 : p.frag_tol;
+        if (tol > 0 && tightest > 20.0 * tol)
+        {
+          OPENMS_LOG_WARN
+            << "No two peaks anywhere in this file are closer than " << tightest
+            << " Th, yet the fragment tolerance is " << tol << " Th near m/z "
+            << at_mz << ". That is what low-resolution (ion trap) MS2 read with a "
+                        "high-resolution tolerance looks like, and it yields almost "
+                        "no tags for a reason the output cannot show. If the MS2 is "
+                        "ion trap, try -fragment_tolerance 0.3 "
+                        "-fragment_tolerance_unit Da." << std::endl;
+        }
+      }
+    }
 
     const FasTag::Tables tables(p);
     std::ofstream tsv(out.c_str());
