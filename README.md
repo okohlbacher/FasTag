@@ -2,8 +2,10 @@
 
 Partial sequence tags from peptide MS/MS spectra, and a filter that keeps only
 the spectra whose tags occur in sequences you supply. A reimplementation of the
-[DirecTag](https://doi.org/10.1021/pr800154p) algorithm (Tabb et al.,
-*J. Proteome Res.* 2008, 7:3838) as an [OpenMS](https://www.openms.de) TOPP tool.
+[DirecTag](https://doi.org/10.1021/pr800154p) algorithm as an
+[OpenMS](https://www.openms.de) TOPP tool. The citation — Tabb et al.,
+*J. Proteome Res.* 2008, 7:3838 — is for that original DirecTag paper; FasTag
+has no separate publication of its own.
 
 **632,677 spectra from a 5.3 GB mzML in 9 seconds**, 1.2 GB peak memory — 31x
 faster than the reference implementation on the same hardware, returning 5-8%
