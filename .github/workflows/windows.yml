@@ -337,8 +337,23 @@ jobs:
       - name: Patch hardcoded absolute paths in OpenMSTargets.cmake
         shell: bash
         run: |
-          grep -ohE '"[A-Za-z]:/[^"]+\.(lib|dll)"' "$OPENMS_DIR"/OpenMSTargets*.cmake \
-            | tr -d '"' | sort -u | while read -r p; do
+          # grep exits 1 (not an error) when nothing matches, and this step's
+          # default -e/pipefail killed the whole thing on that exit code with
+          # zero output on the first attempt -- silent, and easy to misread as
+          # "no hardcoded paths found" when it actually meant "this step never
+          # ran its body at all". `|| true` makes an empty match set the
+          # (entirely possible, and fine) no-op it should be.
+          # Both slash directions: the previous attempt only matched
+          # forward-slash paths and found nothing, which -e/pipefail then
+          # reported as a silent failure with no diagnostic at all rather than
+          # revealing whether the pattern was simply too narrow.
+          MATCHES=$(grep -ohE '"[A-Za-z]:[/\\][^"]+\.(lib|dll)"' "$OPENMS_DIR"/OpenMSTargets*.cmake | tr -d '"' | sort -u || true)
+          if [ -z "$MATCHES" ]; then
+            echo "no absolute .lib/.dll paths matched -- dumping context around OpenSwathAlgo instead:"
+            grep -B2 -A2 -i 'OpenSwathAlgo' "$OPENMS_DIR"/OpenMSTargets*.cmake || echo "(OpenSwathAlgo not mentioned at all in this copy)"
+          fi
+          echo "$MATCHES" | while read -r p; do
+            [ -z "$p" ] && continue
             if [ ! -f "$p" ]; then
               base=$(basename "$p")
               real=$(find "$WS/openms-install" -name "$base" 2>/dev/null | head -1)
