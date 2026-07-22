@@ -1,6 +1,6 @@
 name: build
 
-# Linux x64/arm64 and macOS arm64 are green. macOS x64 is on trial.
+# Linux x64/arm64 and macOS x64/arm64. All four green, tests included.
 #
 # Windows is deliberately NOT here -- see doc/BACKLOG-ci.md. It is the only
 # platform with no OpenMS conda package, so it must build OpenMS AND contrib from
@@ -69,12 +69,12 @@ jobs:
           # same matrix whose macos-x64 job wedged the queue. bioconda ships
           # osx-arm64 OpenMS 3.5.0, and QT_HOST_PATH below is what it needed.
           - { name: macos-arm64, runner: macos-14, extra: "llvm-openmp" }
-          # Intel macOS, on trial. `macos-13` is retired -- that is established,
-          # not suspected, and it is what caused the outage described above.
-          # macos-15-intel is GitHub's replacement label. If this does not
-          # schedule either, DROP the target rather than leave it amber: an
-          # untested platform that looks merely "queued" is the more dangerous of
-          # the two states, which is the whole lesson of this file.
+          # Intel macOS. `macos-13` is retired -- established, not suspected, and
+          # the cause of the outage described above. macos-15-intel is GitHub's
+          # replacement label; it schedules and passes. If it is ever retired in
+          # turn, DROP the target rather than leave it amber: an untested platform
+          # that looks merely "queued" is the more dangerous of the two states,
+          # which is the whole lesson of this file.
           - { name: macos-x64,   runner: macos-15-intel, extra: "llvm-openmp" }
 
     steps:
@@ -183,6 +183,16 @@ jobs:
           # Asserting on the configure line rather than on the package means this
           # checks the property that matters -- OpenMP was actually FOUND -- and
           # not merely that something was installed.
+          #
+          # Honest scope: with bioconda's OpenMS this is belt-and-braces, because
+          # OpenMSConfig.cmake does find_dependency(OpenMP) and find_package(OpenMS)
+          # would fail first. Verified by configuring with
+          # -DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=TRUE, which errors with "OpenMS
+          # could not be found because dependency OpenMP could not be found"
+          # rather than silently building serial. FasTag supports OpenMS >= 3.5
+          # generally though, and an OpenMS built without that dependency would
+          # reach FasTag's own non-REQUIRED find_package(OpenMP) -- which warns and
+          # carries on. Cheap guard, narrower exposure than first assumed.
           if ! grep -q "FasTag: OpenMP" configure.log; then
             echo "::error::OpenMP was not found. The binary would be serial and"
             echo "::error::the performance claims would not hold. Configure said:"
