@@ -55,7 +55,18 @@ jobs:
     # cover a job stuck waiting for a runner -- GitHub only starts this clock once
     # the job is picked up, which is exactly the case that wedged this repo. The
     # protection against that is not naming labels that do not exist.
-    timeout-minutes: 40
+    #
+    # 90, not 40: the macOS notarization step below has its own 60-minute
+    # timeout, which is meaningless if the JOB's overall ceiling kills the run
+    # first. A job that never reaches signing (every non-tag push, and Linux
+    # always) still finishes in minutes regardless -- this only widens how
+    # long something is allowed to hang, not how long anything normally takes.
+    # NOTE: this does not cover the documented one-time exception where a
+    # brand-new bundle ID's FIRST notarization submission can take 8-12 hours
+    # (see doc/BACKLOG-ci.md) -- that has to be primed manually, out of band,
+    # before the first real signed release, exactly as the reference project
+    # that pattern came from does it.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -226,6 +237,100 @@ jobs:
           name: FasTag-${{ matrix.name }}
           path: build/FasTag
           if-no-files-found: error
+
+      # ---------------------------------------------------------------------
+      # macOS code signing + notarization, release builds only.
+      #
+      # Adapted from a working reference (BALL/BALLView's release.yml), not
+      # invented -- but that project ships a Qt .app bundle via macdeployqt
+      # and a signed .dmg via create-dmg; FasTag ships one bare CLI
+      # executable, so none of that packaging machinery applies, and one
+      # thing does NOT carry over: `stapler staple` only works on .app
+      # bundles, .pkg installers and disk images, never a lone Mach-O
+      # binary -- Apple's own documented limitation, not an oversight here.
+      # A notarized standalone binary is verified by Gatekeeper via an
+      # ONLINE ticket lookup on first run instead, which needs network
+      # access that one time. There is no staple step below because there
+      # is nothing for it to attach to.
+      #
+      # Gated the same way as the release-upload step above and the
+      # SignPath step in windows.yml: `secrets.X != ''` directly in an `if:`
+      # makes the WHOLE workflow invalid (a 0-job startup_failure on every
+      # push), so the secret is mapped into a step env: (legal) and the
+      # presence check becomes a step OUTPUT that downstream steps gate on.
+      #
+      # UNTESTED until MACOS_* secrets exist on this repo -- none do yet, so
+      # every tag build takes the "not configured" branch and ships
+      # unsigned, same as today. See doc/BACKLOG-ci.md for exactly what is
+      # needed and how to get it.
+      - name: Detect macOS signing readiness
+        if: (matrix.name == 'macos-arm64' || matrix.name == 'macos-x64') && startsWith(github.ref, 'refs/tags/v')
+        id: mac-signing
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_BASE64" ]; then
+            echo "::warning title=Unsigned macOS binary::MACOS_CERTIFICATE_BASE64 is not set -- shipping this release unsigned. Gatekeeper will warn on first run. See doc/BACKLOG-ci.md for what's needed."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import Apple Developer ID cert into CI keychain (macOS)
+        if: steps.mac-signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          # Ephemeral keychain, never the runner's login keychain.
+          KEYCHAIN_PATH="${RUNNER_TEMP}/fastag-signing.keychain-db"
+          CERT_PATH="${RUNNER_TEMP}/cert.p12"
+          echo "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"' | xargs)
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security find-identity -p codesigning -v "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+
+      - name: Codesign FasTag with Developer ID + hardened runtime (macOS)
+        if: steps.mac-signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" --timestamp build/FasTag
+          codesign --verify --strict --verbose=2 build/FasTag
+
+      - name: Submit to Apple notary + wait (macOS)
+        if: steps.mac-signing.outputs.enabled == 'true'
+        timeout-minutes: 60
+        shell: bash
+        env:
+          MACOS_APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: |
+          ditto -c -k --keepParent build/FasTag "${RUNNER_TEMP}/FasTag-notarize.zip"
+          xcrun notarytool submit "${RUNNER_TEMP}/FasTag-notarize.zip" \
+            --apple-id "$MACOS_APPLE_ID" --team-id "$MACOS_TEAM_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" --wait
+
+      # BALL's own release.yml has no equivalent teardown -- its runner is
+      # simply discarded after the job, which is why the keychain never
+      # outlives it either way. Added anyway, cheap and slightly more
+      # careful than the reference: if a later step were ever added after
+      # this one, it would not inherit a non-default keychain search order.
+      - name: Delete signing keychain (macOS)
+        if: always() && steps.mac-signing.outputs.enabled == 'true'
+        shell: bash
+        run: security delete-keychain "${RUNNER_TEMP}/fastag-signing.keychain-db" || true
 
       # Filenames deliberately carry no version: the README links
       # /releases/latest/download/FasTag-<platform>.tar.gz, a GitHub URL form

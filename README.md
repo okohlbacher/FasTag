@@ -34,10 +34,12 @@ Prebuilt binaries for every platform CI covers, from the
 | Windows x64 | [FasTag-windows-x64.zip](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-windows-x64.zip) |
 
 **Not code-signed.** macOS Gatekeeper and Windows SmartScreen will both warn on
-first run — that's expected until a Developer ID (macOS) and an Authenticode
-certificate (Windows) are in place; see the release notes for what each needs.
-Built directly by the CI runs linked from each release, from the exact tagged
-source — verify against `doc/BACKLOG-ci.md` if in doubt.
+first run — that's expected until a Developer ID certificate (macOS) and a
+SignPath Foundation enrollment (Windows) are in place; both workflows already
+have the signing steps scaffolded and gated, inactive only for lack of the
+credentials. See [doc/BACKLOG-ci.md](doc/BACKLOG-ci.md) for exactly what each
+needs. Built directly by the CI runs linked from each release, from the exact
+tagged source.
 
 ## What it does
 

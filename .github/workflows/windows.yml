@@ -233,7 +233,12 @@ jobs:
     # pull_request runs from forks.
     permissions:
       contents: write
-    timeout-minutes: 45
+    # 90, not 45: SignPath's release signing policy requires a human to click
+    # Approve in SignPath's own UI (wait-for-completion: true blocks on it,
+    # deliberately -- an anti-supply-chain control, not a bug), which can take
+    # far longer than a normal warm-cache CI run if nobody is at the keyboard.
+    # A run that never reaches signing still finishes in minutes regardless.
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -411,6 +416,80 @@ jobs:
           name: FasTag-windows-x64
           path: fastag/build/FasTag.exe
           if-no-files-found: error
+
+      # ---------------------------------------------------------------------
+      # Windows Authenticode signing via SignPath Foundation, release builds
+      # only. Adapted from a working reference (BALL/BALLView's release.yml)
+      # almost directly -- same gating pattern, same action.
+      #
+      # `secrets.X != ''` directly in an `if:` makes the WHOLE workflow
+      # invalid (a 0-job startup_failure on every push), so the secret is
+      # mapped into a step env: (legal) and the presence check becomes a step
+      # OUTPUT every downstream step gates on -- never `secrets.*` directly.
+      #
+      # project-slug is a PLACEHOLDER: SignPath Foundation enrollment is
+      # per-project, and 'fastag' is only correct if that is the slug this
+      # project is actually assigned when enrolled at signpath.org -- verify
+      # and edit if not. artifact-configuration-slug 'initial' additionally
+      # requires SignPath's own console (not a repo file) to have an
+      # artifact configuration under that name expecting a zipped .exe:
+      #   <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+      #     <zip-file><pe-file path="*.exe"><authenticode-sign /></pe-file></zip-file>
+      #   </artifact-configuration>
+      # (actions/upload-artifact always zips, so SignPath receives a .zip
+      # regardless -- an artifact-configuration expecting a bare .exe fails
+      # with "file does not correspond to the specified file type".)
+      #
+      # UNTESTED until SIGNPATH_API_TOKEN/SIGNPATH_ORG_ID exist on this repo
+      # -- neither does yet, so every tag build takes the "not configured"
+      # branch and ships unsigned, same as today. See doc/BACKLOG-ci.md.
+      - name: Determine SignPath availability (Windows)
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: signpath-gate
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:SIGNPATH_API_TOKEN)) {
+            Write-Host "::warning title=Unsigned Windows binary::SIGNPATH_API_TOKEN is not set -- shipping this release unsigned. SmartScreen will warn on first run. See doc/BACKLOG-ci.md for what's needed."
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          } else {
+            "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          }
+
+      - name: Upload unsigned binary for SignPath (Windows)
+        if: steps.signpath-gate.outputs.enabled == 'true'
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: FasTag-windows-x64-unsigned
+          path: fastag/build/FasTag.exe
+          if-no-files-found: error
+
+      - name: Sign via SignPath Foundation (Windows)
+        if: steps.signpath-gate.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORG_ID }}
+          project-slug: 'fastag'
+          signing-policy-slug: 'release-signing'
+          artifact-configuration-slug: 'initial'
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: 'signed'
+
+      - name: Replace unsigned binary with the signed one (Windows)
+        if: steps.signpath-gate.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem -Path "signed" -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($signed) {
+            Copy-Item -Path $signed.FullName -Destination "fastag/build/FasTag.exe" -Force
+            Write-Host "Signed binary in place: $($signed.Name)"
+          } else {
+            Write-Host "::warning::SignPath step ran but no signed artifact found under signed/"
+          }
 
       # Same mechanism as ci.yml's identical step -- see there for why the
       # filename carries no version and why the create-or-fail-harmlessly

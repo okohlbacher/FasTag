@@ -113,6 +113,68 @@ filesystem tolerates the mixed separators fine — both fixed by never piping a
 Windows path through `xargs`, and by normalizing every workspace/Qt path to
 forward slashes once, up front.
 
+## Release binaries: built, not signed
+
+Every tag build attaches its own binary to the GitHub Release automatically
+(`gh release upload ... --clobber`, one per platform, racing harmlessly
+across two workflows and five jobs — whichever finishes first creates the
+release itself if it doesn't exist yet). Filenames carry no version
+(`FasTag-<platform>.tar.gz`/`.zip`) so the README's
+`/releases/latest/download/<name>` links stay valid across every future
+release without editing.
+
+**Signing scaffolding exists in both workflows (`ci.yml` for macOS,
+`windows.yml` for Windows) but is inactive** — neither
+`MACOS_CERTIFICATE_BASE64` nor `SIGNPATH_API_TOKEN` exists as a repo secret,
+so every tag build takes the "not configured" branch and ships an unsigned
+binary with a `::warning::`, exactly as before this scaffolding was added.
+Adapted from a working reference (BALL/BALLView's `release.yml`), not
+invented — but that project ships a Qt `.app` bundle and an NSIS installer;
+FasTag ships one bare CLI executable, so the macOS path has no
+`.app`/`.dmg`/entitlements/Sparkle machinery, and — importantly — no
+`stapler staple` step, because stapling only works on bundles, installers
+and disk images, never a lone Mach-O binary. A notarized standalone binary is
+instead verified by Gatekeeper via an online ticket lookup on first run.
+
+**To enable macOS signing**, add 7 repo secrets: `MACOS_CERTIFICATE_BASE64`
+(a Developer ID Application cert+key, `.p12` export, base64-encoded),
+`MACOS_CERTIFICATE_PASSWORD` (that `.p12`'s password), `MACOS_KEYCHAIN_PASSWORD`
+(any password for the throwaway CI keychain), `MACOS_SIGNING_IDENTITY`
+(`Developer ID Application: Name (TEAMID)`, read via
+`security find-identity -p codesigning -v`), `MACOS_APPLE_ID`, `MACOS_TEAM_ID`,
+`MACOS_NOTARY_PASSWORD` (an app-specific password for `notarytool`). Requires
+an active Apple Developer Program membership. A Developer ID Application
+certificate is scoped to the **Team**, not to one app — if the same Apple
+Developer account already has one (for another project), it signs FasTag too;
+no need for a second certificate.
+
+**To enable Windows signing**, apply to
+[SignPath Foundation](https://signpath.org/)'s free open-source signing
+program for FasTag specifically (enrollment is per-project — a certificate
+issued for a different project's slug does not cover this one), then add 2
+repo secrets: `SIGNPATH_API_TOKEN` and `SIGNPATH_ORG_ID`. The private key
+never leaves SignPath's HSM; there is no `.pfx` file to manage or lose.
+Also requires, in SignPath's own console (not a repo file), an
+artifact-configuration matching what `windows.yml` requests (slug `initial`
+by default — edit the workflow if enrollment assigns a different one):
+```xml
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file><pe-file path="*.exe"><authenticode-sign /></pe-file></zip-file>
+</artifact-configuration>
+```
+The release signing policy should keep manual approval on — `wait-for-completion:
+true` blocks the job until a human clicks Approve in SignPath's UI, a
+deliberate anti-supply-chain control, not a bug to route around.
+
+**Two gotchas already avoided, not rediscovered**: `secrets.X != ''` used
+directly in a step or job `if:` makes the **whole workflow** invalid — GitHub
+emits a 0-job `startup_failure` on every push, tag included. Both signing
+paths instead map the secret into a step `env:` (legal), and every downstream
+step gates on a plain step *output* instead. And `actions/upload-artifact`
+always zips its payload, so an artifact-configuration expecting a bare `.exe`
+fails with "file does not correspond to the specified file type" — the
+`<zip-file>` wrapper above is required, not optional.
+
 ## Anything else worth knowing
 
 - `cancel-in-progress: true` in both workflows, for the reason given above: a
