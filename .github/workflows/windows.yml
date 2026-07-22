@@ -295,25 +295,27 @@ jobs:
       - name: Locate OpenMSConfig.cmake
         shell: bash
         run: |
-          # OpenMS's Windows install apparently writes its CMake package to
-          # two different places: an incomplete copy at <prefix>/CMake/ (config
-          # + config-version, no Modules/, no OpenMSTargets.cmake -- confirmed
-          # by a prior run's "include could not find requested file:
-          # .../CMake/OpenMSTargets.cmake") and a complete one, co-located with
-          # the Modules/ directory FindLIBSVM.cmake was found in earlier. Take
-          # whichever OpenMSConfig.cmake has OpenMSTargets.cmake next to it,
-          # not just the first one `find` happens to return.
-          CFG=""
-          while IFS= read -r f; do
-            d=$(dirname "$f")
-            if [ -f "$d/OpenMSTargets.cmake" ]; then CFG="$f"; break; fi
-          done < <(find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null)
+          # The "prefer a sibling OpenMSTargets.cmake" theory was wrong -- no
+          # copy of OpenMSConfig.cmake anywhere in the install tree has one
+          # next to it, confirmed by that exact search finding nothing on the
+          # previous run. Listing both sets in full rather than guessing a
+          # third time: either OpenMSTargets.cmake lives somewhere
+          # disconnected from every config copy (fixable from here), or it was
+          # never installed at all (an OpenMS-side install() gap, fixable only
+          # in the prep job).
+          echo "--- every OpenMSConfig.cmake ---"
+          find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>&1
+          echo "--- every OpenMSTargets.cmake ---"
+          find "$WS/openms-install" -name 'OpenMSTargets.cmake' 2>&1
+          echo "--- every *Targets*.cmake (in case it is named/versioned differently) ---"
+          find "$WS/openms-install" -iname '*Targets*.cmake' 2>&1
+
+          CFG=$(find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
           if [ -z "$CFG" ]; then
-            echo "::error::No OpenMSConfig.cmake with a sibling OpenMSTargets.cmake found."
+            echo "::error::No OpenMSConfig.cmake in the restored cache."
             exit 1
           fi
           echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
-          echo "using: $CFG"
 
       # OpenMSConfig.cmake.in does
       #   list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/Modules/")
