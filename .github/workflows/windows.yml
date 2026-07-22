@@ -295,12 +295,25 @@ jobs:
       - name: Locate OpenMSConfig.cmake
         shell: bash
         run: |
-          CFG=$(find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
+          # OpenMS's Windows install apparently writes its CMake package to
+          # two different places: an incomplete copy at <prefix>/CMake/ (config
+          # + config-version, no Modules/, no OpenMSTargets.cmake -- confirmed
+          # by a prior run's "include could not find requested file:
+          # .../CMake/OpenMSTargets.cmake") and a complete one, co-located with
+          # the Modules/ directory FindLIBSVM.cmake was found in earlier. Take
+          # whichever OpenMSConfig.cmake has OpenMSTargets.cmake next to it,
+          # not just the first one `find` happens to return.
+          CFG=""
+          while IFS= read -r f; do
+            d=$(dirname "$f")
+            if [ -f "$d/OpenMSTargets.cmake" ]; then CFG="$f"; break; fi
+          done < <(find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null)
           if [ -z "$CFG" ]; then
-            echo "::error::No OpenMSConfig.cmake in the restored cache."
+            echo "::error::No OpenMSConfig.cmake with a sibling OpenMSTargets.cmake found."
             exit 1
           fi
           echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
+          echo "using: $CFG"
 
       # OpenMSConfig.cmake.in does
       #   list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/Modules/")
