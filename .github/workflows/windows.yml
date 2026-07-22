@@ -154,7 +154,19 @@ jobs:
           cmake --build build
           cmake --install build
 
+      # Keyed on both pinned revisions, not on anything in FasTag itself, so a
+      # FasTag-side iteration (like the CMAKE_PREFIX_PATH fix below) does not
+      # force a ~65-minute OpenMS recompile it cannot possibly need. Bump the
+      # -v1 suffix if OpenMS's own configure flags change.
+      - name: Cache OpenMS install
+        id: cache-openms
+        uses: actions/cache@v4
+        with:
+          path: openms-install
+          key: windows-x64-openms-${{ env.OPENMS_TAG }}-${{ env.CONTRIB_REV }}-v1
+
       - name: Configure OpenMS
+        if: steps.cache-openms.outputs.cache-hit != 'true'
         shell: bash
         run: |
           # GUI, tests, docs and packaging all OFF: FasTag needs the library,
@@ -178,13 +190,14 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/openms-install"
 
       - name: Build and install OpenMS
+        if: steps.cache-openms.outputs.cache-hit != 'true'
         shell: bash
         run: |
           # No narrower --target: OpenMS's install() rules were not audited for
           # which targets they actually require, and getting that wrong fails at
           # install time having already paid for most of the build. Correctness
           # over speed on a first attempt; worth narrowing once this succeeds
-          # once.
+          # once. Measured on the first successful run: 63 minutes.
           cmake --build openms-build --parallel
           cmake --build openms-build --target install
 
@@ -201,14 +214,22 @@ jobs:
       - name: Configure FasTag
         shell: bash
         run: |
-          # Same Eigen3 range shim as every other platform; see ci.yml. Qt and
-          # the conda prefix must be on CMAKE_PREFIX_PATH again here, not only
-          # for OpenMS's own build -- OpenMSConfig.cmake's find_dependency(Qt6)
-          # runs again when FasTag configures against the install.
+          # Same Eigen3 range shim as every other platform; see ci.yml. Qt,
+          # the conda prefix AND contrib-build must all be on CMAKE_PREFIX_PATH
+          # again here, not only for OpenMS's own build.
+          #
+          # OpenMSConfig.cmake does find_dependency(XercesC) (and similarly for
+          # every other contrib-built dependency) at THIS configure time, using
+          # ordinary find_package semantics -- not via OPENMS_CONTRIB_LIBS, which
+          # is a hint OpenMS's own CMakeLists reads at ITS configure time and
+          # does not thread into the installed config file. Omitting contrib-build
+          # here failed with "Failed to find XercesC (missing: XercesC_LIBRARY
+          # XercesC_INCLUDE_DIR XercesC_VERSION)" on the first real run, since
+          # XercesC is contrib-built here and nowhere else on this platform.
           cmake -S fastag -B fastag/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DOpenMS_DIR="$OPENMS_DIR" \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$CONDA_LIB_PREFIX" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$CONDA_LIB_PREFIX;$GITHUB_WORKSPACE/contrib-build" \
             -DEigen3_DIR="$GITHUB_WORKSPACE/fastag/cmake/eigen3-range-shim" \
             -DEIGEN3_INCLUDE_DIR="C:/ProgramData/chocolatey/lib/eigen/share/cmake/../../include/eigen3"
 
