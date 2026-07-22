@@ -333,9 +333,12 @@ protected:
       return ILLEGAL_PARAMETERS;
     }
 
-    OnDiscMSExperiment ondisc;
+    // A pointer, not a value: the fallback below must replace this with a
+    // genuinely fresh reader, and OnDiscMSExperiment's operator= is private
+    // (copy-construction only), so an in-place reassignment isn't available.
+    auto ondisc = std::make_unique<OnDiscMSExperiment>();
     PeakMap exp;
-    const bool streaming = !mzpeak_in && ondisc.openFile(in, out_spectra.empty());
+    const bool streaming = !mzpeak_in && ondisc->openFile(in, out_spectra.empty());
     if (!streaming && !mzpeak_in)
     {
       OPENMS_LOG_WARN << "'" << in << "' has no usable index; reading it entirely "
@@ -345,17 +348,29 @@ protected:
     }
     // Refuse to run blind on an unpatched OpenMS.
     //
-    // Without the patch every spectrum comes back with MS level 0 and no
-    // precursor, so the MS2 test rejects all of them and the tool reports a
-    // clean run with an empty output file. That is the worst possible failure --
-    // indistinguishable from a file that genuinely holds no MS2 -- so probe for
-    // it and take the slow path instead of producing a confident nothing.
+    // Without the patch every spectrum comes back at MS level 1 (the
+    // default-constructed value, never overwritten) with no precursor, so the
+    // MS2 test rejects all of them and the tool reports a clean run with an
+    // empty output file. That is the worst possible failure -- indistinguishable
+    // from a file that genuinely holds no MS2 -- so probe for it and take the
+    // slow path instead of producing a confident nothing.
+    //
+    // The probe checks for level 2 WITH a precursor -- what tag_one() actually
+    // requires -- not merely "level > 0". A bare ">0" is satisfied by the very
+    // default this guard exists to catch (level 1 is > 0), so it passed on
+    // spectrum 0 of every file regardless of what the reader actually reported,
+    // and the fallback never engaged. Confirmed against a real 617 MB Thermo
+    // file built with stock bioconda OpenMS: every spectrum read back at level 1
+    // through the fast path, 0 of 53,521 MS2 spectra found, no warning printed.
     if (streaming && out_spectra.empty() && !mzpeak_in)
     {
       bool have_meta = false;
-      const Size probe = std::min<Size>(ondisc.getNrSpectra(), 64);
+      const Size probe = std::min<Size>(ondisc->getNrSpectra(), 64);
       for (Size i = 0; i < probe && !have_meta; ++i)
-        if (ondisc.getSpectrum(i).getMSLevel() > 0) have_meta = true;
+      {
+        const MSSpectrum s = ondisc->getSpectrum(i);
+        if (s.getMSLevel() == 2 && !s.getPrecursors().empty()) have_meta = true;
+      }
       if (!have_meta && probe > 0)
       {
         OPENMS_LOG_WARN << "This OpenMS does not report spectrum metadata from the "
@@ -363,10 +378,16 @@ protected:
                            "loading metadata up front instead. Expect roughly a "
                            "minute of extra single-threaded startup on a large file."
                         << std::endl;
-        ondisc.openFile(in);
+        // A fresh instance, not a second openFile() on this one: calling
+        // openFile() again on the SAME OnDiscMSExperiment crashed (EXC_BAD_ACCESS
+        // inside MSSpectrum's copy constructor, reached via getSpectrum()) on the
+        // same real file this whole guard exists for -- this fallback had never
+        // actually run before, since the old ">0" probe never triggered it.
+        ondisc = std::make_unique<OnDiscMSExperiment>();
+        ondisc->openFile(in);
       }
     }
-    const size_t n_total = mzpeak_in ? 0 : (streaming ? ondisc.getNrSpectra() : exp.size());
+    const size_t n_total = mzpeak_in ? 0 : (streaming ? ondisc->getNrSpectra() : exp.size());
 
     // Warn when the fragment tolerance looks far too tight for the data.
     //
@@ -389,7 +410,7 @@ protected:
       Size seen = 0;
       for (Size i = 0; i < n_total && seen < want; i += step)
       {
-        MSSpectrum s = streaming ? ondisc.getSpectrum(i) : exp[i];
+        MSSpectrum s = streaming ? ondisc->getSpectrum(i) : exp[i];
         if (s.getMSLevel() != 2 || s.size() < 8) continue;
         ++seen;
         s.sortByPosition();
@@ -423,7 +444,7 @@ protected:
     PeakMap kept;
     if (streaming)
     {
-      if (auto meta = ondisc.getMetaData()) kept.getExperimentalSettings() = *meta;
+      if (auto meta = ondisc->getMetaData()) kept.getExperimentalSettings() = *meta;
     }
     else kept.getExperimentalSettings() = exp.getExperimentalSettings();
 
@@ -584,7 +605,7 @@ protected:
       // documented as not thread-safe.
       // Copy-constructed, not assigned: OnDiscMSExperiment's operator= is private.
       std::unique_ptr<OnDiscMSExperiment> reader;
-      if (streaming) reader = std::make_unique<OnDiscMSExperiment>(ondisc);
+      if (streaming) reader = std::make_unique<OnDiscMSExperiment>(*ondisc);
 
 #pragma omp for schedule(dynamic, 64)
       for (SignedSize i = 0; i < n_spec; ++i)
