@@ -26,10 +26,11 @@ Not one was visible on any machine that had built FasTag before — laptop and H
 both had Eigen worked around by hand and Boost/Qt supplied by contrib. These are
 what a new user hits on a clean machine.
 
-## macOS — arm64 GREEN, x64 on trial
+## macOS — BOTH GREEN
 
-Both are back in the matrix. The earlier diagnosis in this file was wrong in a
-way worth recording.
+Resolved. `linux-x64`, `linux-arm64`, `macos-arm64` and `macos-x64` all passed in
+run 29891819334, tests included. The earlier diagnosis in this file was wrong in
+a way worth recording.
 
 **macos-arm64 passes.** Not a prediction — it completed successfully in run
 29857387912, in the very matrix that was then removed. bioconda's `osx-arm64`
@@ -45,10 +46,11 @@ push to main was blocked behind it for about a day. It took cancelling the run b
 hand to clear. The v0.9.0 tag build passed throughout only because tags get their
 own concurrency group, which made main look merely slow rather than stuck.
 
-Now on `macos-15-intel`, GitHub's replacement Intel label, and **on trial**. If it
-does not schedule either, delete the target. This file's own advice applies and is
-now backed by an incident: *an untested platform that looks merely "queued" is
-more dangerous than one that is openly missing.*
+`macos-15-intel`, GitHub's replacement Intel label, **schedules and passes**. The
+entire "scarce runner" theory was wrong: one label change fixed what six runs and
+a concurrency rewrite could not. The lesson is not about macOS — it is that
+*"queued" was read as a capacity symptom for a day without anyone checking
+whether the label still existed.*
 
 Two changes make a repeat impossible to hide:
 

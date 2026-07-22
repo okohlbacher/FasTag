@@ -52,19 +52,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x64,   runner: ubuntu-24.04 }
-          - { name: linux-arm64, runner: ubuntu-24.04-arm }
+          # `extra` carries per-platform conda packages. macOS asks for
+          # llvm-openmp explicitly because Apple's clang ships no OpenMP runtime.
+          #
+          # It is already present TRANSITIVELY -- run 29891819334 found OpenMP 5.1
+          # on macos-arm64 without asking, because libopenblas pulls llvm-openmp
+          # in. That is luck, not a guarantee: nothing in this repo depends on
+          # OpenMS continuing to depend on openblas. Naming it makes a property
+          # the build currently holds by accident into one it holds by contract.
+          #
+          # Linux gets OpenMP from the gcc toolchain; adding llvm-openmp there
+          # risks clashing with libgomp.
+          - { name: linux-x64,   runner: ubuntu-24.04,     extra: "" }
+          - { name: linux-arm64, runner: ubuntu-24.04-arm, extra: "" }
           # macos-arm64 is not speculative: it PASSED in run 29857387912, in the
           # same matrix whose macos-x64 job wedged the queue. bioconda ships
           # osx-arm64 OpenMS 3.5.0, and QT_HOST_PATH below is what it needed.
-          - { name: macos-arm64, runner: macos-14 }
+          - { name: macos-arm64, runner: macos-14, extra: "llvm-openmp" }
           # Intel macOS, on trial. `macos-13` is retired -- that is established,
           # not suspected, and it is what caused the outage described above.
           # macos-15-intel is GitHub's replacement label. If this does not
           # schedule either, DROP the target rather than leave it amber: an
           # untested platform that looks merely "queued" is the more dangerous of
           # the two states, which is the whole lesson of this file.
-          - { name: macos-x64,   runner: macos-15-intel }
+          - { name: macos-x64,   runner: macos-15-intel, extra: "llvm-openmp" }
 
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +106,7 @@ jobs:
             cmake
             ninja
             cxx-compiler
+            ${{ matrix.extra }}
           condarc: |
             channels:
               - conda-forge
@@ -119,6 +131,16 @@ jobs:
       - name: Configure
         shell: bash -el {0}
         run: |
+          # pipefail, because the cmake line below is piped into tee.
+          #
+          # This shell is `bash -el`, which has errexit but NOT pipefail, so a
+          # pipeline reports the exit status of its LAST command -- tee, which
+          # essentially always succeeds. Without this, a failed configure would be
+          # swallowed and the job would march on to Build and fail there with a
+          # far more confusing error. GitHub's default shell sets pipefail; this
+          # one was written explicitly and does not.
+          set -o pipefail
+
           # Eigen3 needs the shim this repo already ships.
           #
           # OpenMSConfig.cmake does find_dependency(Eigen3 3.4.0...<6). Eigen 3.4's
@@ -144,7 +166,30 @@ jobs:
             -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
             -DQT_HOST_PATH="$CONDA_PREFIX" \
             -DEigen3_DIR="$PWD/cmake/eigen3-range-shim" \
-            -DEIGEN3_INCLUDE_DIR="$CONDA_PREFIX/include/eigen3"
+            -DEIGEN3_INCLUDE_DIR="$CONDA_PREFIX/include/eigen3" 2>&1 | tee configure.log
+
+      - name: Verify OpenMP was found
+        shell: bash -el {0}
+        run: |
+          # Without this, macOS goes GREEN while shipping a serial binary.
+          #
+          # Missing OpenMP is not a build error. CMakeLists.txt warns and carries
+          # on, the #pragmas become no-ops, the omp_* fallback stubs return 1, and
+          # the result is a correct tool that ignores -threads while README.md
+          # still advertises ~10x on 16 cores. Every test passes. Apple's clang
+          # ships no OpenMP runtime, so macOS is precisely where this would have
+          # happened.
+          #
+          # Asserting on the configure line rather than on the package means this
+          # checks the property that matters -- OpenMP was actually FOUND -- and
+          # not merely that something was installed.
+          if ! grep -q "FasTag: OpenMP" configure.log; then
+            echo "::error::OpenMP was not found. The binary would be serial and"
+            echo "::error::the performance claims would not hold. Configure said:"
+            grep -i "openmp" configure.log || echo "(no OpenMP line at all)"
+            exit 1
+          fi
+          grep "FasTag: OpenMP" configure.log
 
       - name: Build
         shell: bash -el {0}

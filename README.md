@@ -9,8 +9,11 @@ the spectra whose tags occur in sequences you supply. A reimplementation of the
 faster than the reference implementation on the same hardware, returning 5-8%
 more tags.
 
-Requires **OpenMS >= 3.5**. Verified against 3.5.0 (Linux, gcc-13) and 3.6.0
-(macOS arm64, AppleClang).
+Requires **OpenMS >= 3.5**. CI builds and runs the test suite on **Linux x64 and
+arm64, and macOS x64 and arm64**, against bioconda's OpenMS 3.5.0. Also developed
+against 3.6.0 (macOS arm64, AppleClang). Windows is not supported — it is the one
+platform with no OpenMS conda package, so it must build OpenMS and contrib from
+source; see [doc/BACKLOG-ci.md](doc/BACKLOG-ci.md).
 
 **Input is mzML, or [mzPeak](https://github.com/OpenMS/mzpeak) when the OpenMS it
 is built against provides `MzPeakFile`** — configure reports which you have.
