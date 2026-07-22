@@ -288,6 +288,13 @@ jobs:
             exit 1
           fi
           echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
+          echo "OpenMSConfig.cmake at: $CFG"
+          echo "--- sibling contents ---"
+          ls -la "$(dirname "$CFG")"
+          echo "--- Modules/ contents, if any ---"
+          ls -la "$(dirname "$CFG")/Modules" 2>&1 || echo "(no Modules/ subdirectory here)"
+          echo "--- any FindLIBSVM.cmake anywhere in the install tree ---"
+          find openms-install -iname 'FindLIBSVM.cmake' 2>&1
 
       # Find any contrib-built dependency's config file that is NOT where
       # CMAKE_PREFIX_PATH would find it unaided, and pass its directory
