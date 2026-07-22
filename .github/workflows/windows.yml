@@ -282,7 +282,7 @@ jobs:
       - name: Locate OpenMSConfig.cmake
         shell: bash
         run: |
-          CFG=$(find openms-install -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
+          CFG=$(find "$GITHUB_WORKSPACE/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
           if [ -z "$CFG" ]; then
             echo "::error::No OpenMSConfig.cmake in the restored cache."
             exit 1
@@ -304,7 +304,16 @@ jobs:
       - name: Locate FindLIBSVM.cmake for CMAKE_MODULE_PATH
         shell: bash
         run: |
-          MOD=$(find openms-install -iname 'FindLIBSVM.cmake' 2>/dev/null | head -1 | xargs -r dirname)
+          # Absolute, not relative to whatever directory CMake happens to
+          # evaluate the check against for this variable -- the previous
+          # attempt passed a workspace-relative path and CMake still reported
+          # LIBSVM not found despite the file demonstrably being right there,
+          # which points at exactly this kind of relative-path mismatch.
+          # OPENMS_DIR (also relative before) apparently tolerated it since
+          # <Name>_DIR-style CONFIG search resolves differently to
+          # CMAKE_MODULE_PATH's own internal existence checks; not worth
+          # fully explaining when absolute removes the ambiguity outright.
+          MOD=$(find "$GITHUB_WORKSPACE/openms-install" -iname 'FindLIBSVM.cmake' 2>/dev/null | head -1 | xargs -r dirname)
           if [ -z "$MOD" ]; then
             echo "::error::No FindLIBSVM.cmake anywhere under openms-install."
             exit 1
