@@ -304,24 +304,21 @@ jobs:
       - name: Locate FindLIBSVM.cmake for CMAKE_MODULE_PATH
         shell: bash
         run: |
-          # Absolute, not relative to whatever directory CMake happens to
-          # evaluate the check against for this variable -- the previous
-          # attempt passed a workspace-relative path and CMake still reported
-          # LIBSVM not found despite the file demonstrably being right there,
-          # which points at exactly this kind of relative-path mismatch.
-          # OPENMS_DIR (also relative before) apparently tolerated it since
-          # <Name>_DIR-style CONFIG search resolves differently to
-          # CMAKE_MODULE_PATH's own internal existence checks; not worth
-          # fully explaining when absolute removes the ambiguity outright.
-          MOD=$(find "$GITHUB_WORKSPACE/openms-install" -iname 'FindLIBSVM.cmake' 2>/dev/null | head -1 | xargs -r dirname)
-          if [ -z "$MOD" ]; then
+          # NOT `find ... | xargs dirname`: xargs's default quoting treats a
+          # backslash as an escape character, and $GITHUB_WORKSPACE on Windows
+          # is backslash-separated (D:\a\FasTag\FasTag) -- piping that through
+          # xargs silently mangled it to D:aFasTagFasTag, which then failed to
+          # exist and made every previous attempt at this fix a no-op no
+          # matter what path was logically correct. Plain command substitution
+          # (as OPENMS_DIR already used successfully above) does not have this
+          # problem, since nothing re-parses the string as word-split input.
+          FOUND=$(find "$GITHUB_WORKSPACE/openms-install" -iname 'FindLIBSVM.cmake' 2>/dev/null | head -1)
+          if [ -z "$FOUND" ]; then
             echo "::error::No FindLIBSVM.cmake anywhere under openms-install."
             exit 1
           fi
+          MOD=$(dirname "$FOUND")
           echo "OPENMS_MODULE_PATH=$MOD" >> "$GITHUB_ENV"
-          # Printed rather than assumed: the previous attempt at this same fix
-          # produced the identical LIBSVM error with nothing in the log to say
-          # why, because this step never printed what it found.
           echo "discovered: $MOD"
           ls -la "$MOD"
 
