@@ -2,10 +2,11 @@ name: build
 
 # Linux x64/arm64 and macOS x64/arm64. All four green, tests included.
 #
-# Windows is deliberately NOT here -- see doc/BACKLOG-ci.md. It is the only
-# platform with no OpenMS conda package, so it must build OpenMS AND contrib from
-# source, 30-60 minutes against two. Carrying a job that has never passed teaches
-# the habit of ignoring red, which costs more than the coverage buys.
+# Windows is deliberately in its own workflow (windows.yml), not here -- see
+# doc/BACKLOG-ci.md. It is the only platform with no OpenMS conda package, so
+# it builds OpenMS AND contrib from source (~100 minutes cold, minutes once
+# cached) rather than installing a binary in seconds; that cost difference,
+# not doubt about whether it works, is why it is not folded into this matrix.
 #
 # The job VERIFIES that OpenMSConfig.cmake actually exists before configuring. A
 # package that ships tools but no development files would otherwise fail deep

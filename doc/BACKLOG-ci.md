@@ -1,12 +1,15 @@
-# CI backlog: macOS and Windows
+# CI history: Linux, macOS and Windows
 
-Linux x64 and arm64 are green and gate `main`. macOS and Windows are deferred,
-but were taken far enough that most of the work is diagnosis rather than
-discovery. This records what is known so it does not have to be rediscovered.
+All three platforms are green: Linux x64/arm64 and macOS x64/arm64 gate `main`
+in `ci.yml`; Windows x64 gates `main` in its own `windows.yml`, kept separate
+purely because building OpenMS from source costs ~100 minutes against seconds
+for the conda path everywhere else, not because it is in doubt. This records
+what each one needed, so none of it has to be rediscovered.
 
-**Why they are not in the matrix**: a job that has never passed teaches the habit
-of ignoring red. Better to have two targets that mean something than six where
-four are permanently amber.
+**Why a slow-to-schedule or previously-red platform stays out of a shared
+matrix until proven**: a job that has never passed teaches the habit of
+ignoring red. Better to add a target once it means something than to carry
+several where some are permanently amber.
 
 ## What Linux needed, and why it matters to the others
 
@@ -60,51 +63,63 @@ Two changes make a repeat impossible to hide:
   job waiting for a runner; GitHub starts that clock only once the job is picked
   up. The only defence against an unschedulable label is not to name one.
 
-The local macOS **curl framework** caveat still stands and CI cannot catch it: a
-third-party `/Library/Frameworks/libcurl.framework` shadows the SDK libcurl that
-`libOpenMS.dylib` links, and the binary dies at startup. `CMakeLists.txt` pins
-curl to the SDK; a clean runner has no such framework, so a regression there would
-pass CI and fail on a developer's machine.
-
-There is a local caveat the CI does not exercise: the macOS **curl framework**
+There is a local caveat CI does not exercise: the macOS **curl framework**
 problem. CMake searches frameworks first, so a third-party
 `/Library/Frameworks/libcurl.framework` shadows the SDK libcurl that
-`libOpenMS.dylib` links, and the binary dies at startup. `CMakeLists.txt` already
-pins curl to the SDK; a clean runner has no such framework, so CI would not catch
-a regression there.
+`libOpenMS.dylib` links, and the binary dies at startup. `CMakeLists.txt`
+already pins curl to the SDK; a clean runner has no such framework, so a
+regression there would pass CI and fail on a developer's machine.
 
-## Windows
+## Windows — GREEN, in `windows.yml`
 
-**Status: further away, and the obstacle is OpenMS, not FasTag.**
+Resolved. `windows-x64-openms` and `windows-x64` both passed in run
+29932193776 — configure, build, ctest (7/7) and the smoke test all green, no
+`continue-on-error` left on either job.
 
-There is no OpenMS conda package for Windows and the official installer carries
-**no SDK** — only end-user executables. So Windows must build OpenMS *and*
-contrib from source: 30-60 minutes even cached, against a couple of minutes for
-the conda path.
+**Two jobs, not one — discovered by hitting it, not designed in.**
+`actions/cache`'s save is a post-hook gated on the *job* having succeeded, and
+that gate is not overridden by `continue-on-error` at the job level (which
+only changes how the workflow reports the job's outcome, not the runtime
+`success()` a post-hook's own condition evaluates). The first attempt cached
+contrib and the OpenMS install in the same job as FasTag's own
+configure/build/test; every time FasTag's side failed, *both* caches silently
+failed to save, so the next push repaid the full ~100-minute build to test a
+one-line CMake flag. Split into `windows-x64-openms` (contrib + OpenMS
+install, nothing FasTag-specific, so its own success — and therefore its cache
+saves — no longer depends on FasTag configuring cleanly) and `windows-x64`
+(needs the first job, restores both caches, redoes only the cheap per-runner
+installs: choco, Qt, conda). This is the same two-job pattern OpenMS's own CI
+uses for contrib, now understood to be load-bearing rather than incidental.
 
-The last failure was issue 6 above (MSVC environment), fixed but never
-re-verified. The next unknowns, in the order they will appear:
+**Real timings, not estimates**: contrib 37 min, OpenMS itself 63 min, both on
+a cold cache. Warm-cache reruns (only the `windows-x64` job, choco/Qt/conda
+reinstalled fresh each time) take a few minutes.
 
-1. Does contrib build cleanly on a hosted runner within the time limit?
-2. Does OpenMS build with `WITH_GUI=OFF`?
-3. Does FasTag compile under MSVC? `__uint128_t` was ported to `Kmer128` for
-   exactly this, and that was the only known blocker — but it has never been
-   compiled by MSVC, so others may surface. OpenMP under MSVC is the next most
-   likely: it supports only OpenMP 2.0, and the parallel loop uses `SignedSize`
-   induction variables partly for that reason.
+**What FasTag's own configure needed, once OpenMS itself built** — all found
+by direct diagnosis on a warm cache, not guessed:
 
-**windows-arm64 is likely not achievable.** OpenMS has no ARM Windows support I
-am aware of, and contrib may not configure at all. Attempt it only after
-windows-x64 is green, and be prepared to declare it unsupported rather than leave
-it permanently red.
+| # | issue | fix |
+|---|---|---|
+| 1 | `OpenMSConfig.cmake` re-runs `find_dependency(XercesC)` etc. at every downstream consumer's configure time, using ordinary `find_package` — not via `OPENMS_CONTRIB_LIBS`, which is a hint OpenMS's own CMakeLists reads only at its own configure time | add `contrib-build` to `CMAKE_PREFIX_PATH` for FasTag's configure too |
+| 2 | OpenMS's Windows install splits one logical CMake package directory across two destinations, neither complete alone: `<prefix>/CMake/` has only `OpenMSConfig(Version).cmake`; `<prefix>/bin/cmake/OpenMS/` has `OpenMSTargets(.cmake\|-release.cmake)` and `Modules/` (`FindLIBSVM.cmake` etc.) | copy `OpenMSConfig(Version).cmake` **into** the Targets/Modules directory, not the reverse — `OpenMSTargets.cmake` computes `${_IMPORT_PREFIX}` by walking a fixed parent-directory count baked in at its *original* install depth, so moving it instead silently corrupts every DLL path it exports |
+| 3 | Test/benchmark binaries linking OpenMS failed at run time, `0xc0000135` (`STATUS_DLL_NOT_FOUND`) — Windows has no RPATH/RUNPATH; the loader only searches the `.exe`'s own directory and `PATH` | add OpenMS's, Qt's, contrib's and conda's `bin`/`Library/bin` directories to `PATH` before `ctest` |
 
-A cached OpenMS build is essential — key on the OpenMS tag so it is paid once per
-revision. The workflow that was removed did this; recover it from git history at
-`4952e2d` rather than rewriting it.
+Two more issues cost real iterations before being understood correctly:
+`xargs dirname` silently corrupts a Windows path (backslash is xargs's own
+quote-escape character), and `$GITHUB_WORKSPACE`/`QT_ROOT_DIR` are
+backslash-separated in a way that CMake's own generated `try_compile` scratch
+files reject outright (`Invalid character escape '\a'`) even though the
+filesystem tolerates the mixed separators fine — both fixed by never piping a
+Windows path through `xargs`, and by normalizing every workspace/Qt path to
+forward slashes once, up front.
+
+**windows-arm64 remains out of scope**, per the original assessment: OpenMS
+has no known ARM Windows support. Revisit only if that changes upstream.
 
 ## Anything else worth knowing
 
-- `cancel-in-progress: false` is deliberate. See above.
+- `cancel-in-progress: true` in both workflows, for the reason given above: a
+  wedge is superseded by the next push rather than blocking it.
 - Every job verifies `OpenMSConfig.cmake` exists before configuring, because a
   package with tools but no development files otherwise fails deep inside CMake
   with a misleading message. bioconda's `openms` **does** ship it — that question

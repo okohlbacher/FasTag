@@ -3,13 +3,16 @@ name: windows
 # Windows, separate from build.yml on purpose.
 #
 # There is no OpenMS conda package for Windows and the official installer
-# carries no SDK, so OpenMS must be built from source: contrib (Boost, Xerces,
-# etc.) then OpenMS itself. That is a different order of magnitude from the
-# minutes-long conda path the other four platforms use, and it is UNVERIFIED --
-# nobody has confirmed this project builds under MSVC. Keeping it in its own
-# workflow means a slow, still-unproven job cannot block or slow down the fast
-# jobs that already pass, and it gets its own concurrency group so it cannot
-# repeat the wedge described in ci.yml's history.
+# carries no SDK, so OpenMS is built from source: contrib (Boost, Xerces, etc.)
+# then OpenMS itself. That is a different order of magnitude from the
+# minutes-long conda path the other four platforms use -- ~100 minutes on a
+# cold cache (contrib 37 min, OpenMS 63 min, both measured directly), a few
+# minutes once both are cached. Proven end to end: configure, build, ctest and
+# the smoke test all pass. Kept in its own workflow rather than folded into
+# build.yml's matrix because of that cost difference, not because it is in
+# doubt -- both jobs gate the same as everywhere else (no continue-on-error),
+# and it gets its own concurrency group so a slow run cannot repeat the wedge
+# described in ci.yml's history.
 #
 # The recipe is adapted from OpenMS's OWN current CI
 # (.github/workflows/openms_ci_matrix_full.yml in OpenMS/OpenMS, read directly
@@ -65,7 +68,6 @@ jobs:
   windows-x64-openms:
     name: windows-x64-openms
     runs-on: windows-2022
-    continue-on-error: true
     # contrib measured at 37 min, OpenMS itself at 63 min on the first clean
     # run; generous headroom above that, not a tuned estimate.
     timeout-minutes: 180
@@ -226,7 +228,6 @@ jobs:
     name: windows-x64
     runs-on: windows-2022
     needs: windows-x64-openms
-    continue-on-error: true
     timeout-minutes: 45
 
     steps:
