@@ -105,16 +105,60 @@ implemented. Its motivation was reducing redundancy between the two families,
 which `-gap_penalty` now addresses more directly by separating them in the
 ranking. Reconsider only if redundancy is shown to cost something measurable.
 
-## Peak-cap defaults rest on one acquisition type
+## Peak-cap defaults — sweep DONE, default deliberately unchanged
 
-Raising `max_peaks` from 100 to 500 gained 56% more spectra with a correctly
-placed tag — but only measured on diaTracer pseudo-MS2, whose peak count is
-clamped flat at 500 so the cap always binds. Real ddaPASEF runs 95-273 peaks per
-spectrum, where a 100-peak cap will rarely bind at all.
+The sweep this entry asked for has been run across all four acquisition classes
+(`bench/benchmark.cpp`, TL=4, gaps on).
 
-`-peaks_per_window` exists as the density-adaptive alternative and is at least as
-good where it could be measured, but the defaults were deliberately left alone
-rather than tuned on data whose defining property is being unusually dense.
+**The flat 100-peak cap is strongly dataset-dependent — the defect suspected here
+is real, and larger than expected.** rank-1 / total recall:
 
-Redo the cap and windowing sweeps across the four benchmark datasets before
-changing any default.
+| cap | astral | ddapasef | diatracer | iontrap |
+|---|---|---|---|---|
+| 50 | 12.9 / 35.1 | 37.6 / 78.2 | 26.6 / 64.7 | 14.5 / 62.2 |
+| **100 (default)** | **27.5 / 69.9** | **45.7 / 87.4** | **44.3 / 86.6** | **22.7 / 76.3** |
+| 200 | 46.6 / 90.8 | 46.5 / 89.3 | 55.7 / 94.7 | 25.3 / 80.8 |
+| 400 | 63.3 / 97.2 | 46.7 / 89.3 | 60.3 / 96.0 | 25.3 / 80.9 |
+| 800 | 67.3 / 97.8 | 46.7 / 89.3 | 60.2 / 96.2 | 25.3 / 80.9 |
+
+Sparse classes saturate by 200 because their spectra have no more peaks to give.
+Dense ones do not saturate until 400-800: **the default starves Astral data by a
+factor of two in rank-1 accuracy.** Where a run lands on this table is decided
+entirely by the instrument, which is the dependence worth removing.
+
+`-peaks_per_window` removes it, as designed. The quota binds only where there is
+density to spend it, so sparse classes barely move while dense ones gain a lot:
+
+| setting | astral | ddapasef | diatracer | iontrap |
+|---|---|---|---|---|
+| cap 100 | 27.5 / 69.9 | 45.7 / 87.4 | 44.3 / 86.6 | 22.7 / 76.3 |
+| ppw 10, cap 400 | 44.3 / 84.6 | 45.8 / 88.8 | 50.9 / 89.6 | 23.8 / 80.6 |
+| ppw 15, cap 800 | 54.8 / 92.6 | 46.6 / 89.2 | 56.6 / 94.8 | 24.6 / 80.8 |
+
+It is not free. Real-file wall time, 8 threads:
+
+| | astral_lf (102k spectra) | ddaPASEF (371k spectra) |
+|---|---|---|
+| default | 10.3 s | 35.2 s |
+| ppw 10 / cap 400 | 20.3 s | 44.0 s |
+| ppw 15 / cap 800 | 27.7 s | 49.6 s |
+
+### Decision: default unchanged, pending real ground truth
+
+Deliberate, and the conservative call. Every number above comes from spectra this
+project generated to test itself; none is a measurement on real data with real
+identifications. Changing a released tool's output and doubling its runtime is
+not something synthetic evidence should decide, however consistent it is.
+
+**Prerequisite to revisiting**: regenerate the Sage ground truth. That needs Sage
+0.14.7, a human FASTA with reversed decoys, the S23 diaTracer file, and the
+precursor-injection fix in `vault/03-Design/SAGE-Tag-Confirmation.md` (Sage
+otherwise panics with `missing MS1 precursor for frame=1`, because diaTracer
+writes precursor m/z only on the isolation window). None of it is currently on
+this machine — see `TEST-DATA.md`. Rerun the two tables above against PSMs and
+the decision makes itself.
+
+**Recommendation when that happens**: `-peaks_per_window 10 -max_peaks 400`. Most
+of the available gain, at the knee of the time curve, and its worst case across
+the four classes still beats today's default. Users who know their data is dense
+can pass it today.

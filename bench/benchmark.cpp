@@ -444,6 +444,7 @@ int main(int argc, char** argv)
   const double gpen  = argc > 8 ? std::atof(argv[8]) : -1.0;
   const double maxev = argc > 9 ? std::atof(argv[9]) : 20.0;
   const int max_tags = argc > 10 ? std::atoi(argv[10]) : 50;
+  const int ppw      = argc > 11 ? std::atoi(argv[11]) : 0;
 
   FasTag::Param p;
   p.tag_length = tag_len;
@@ -457,6 +458,7 @@ int main(int argc, char** argv)
   if (gpen >= 0) p.gap_penalty = gpen;   // negative keeps the shipped default
   p.max_evalue = maxev;
   p.max_tag_count = max_tags;
+  p.peaks_per_window = ppw;
   const FasTag::Tables tables(p);
 
   Score sc;
