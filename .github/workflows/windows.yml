@@ -1,0 +1,231 @@
+name: windows
+
+# Windows, separate from build.yml on purpose.
+#
+# There is no OpenMS conda package for Windows and the official installer
+# carries no SDK, so OpenMS must be built from source: contrib (Boost, Xerces,
+# etc.) then OpenMS itself. That is a different order of magnitude from the
+# minutes-long conda path the other four platforms use, and it is UNVERIFIED --
+# nobody has confirmed this project builds under MSVC. Keeping it in its own
+# workflow means a slow, still-unproven job cannot block or slow down the fast
+# jobs that already pass, and it gets its own concurrency group so it cannot
+# repeat the wedge described in ci.yml's history.
+#
+# The recipe below is not invented. It is adapted from OpenMS's OWN current CI
+# (.github/workflows/openms_ci_matrix_full.yml in OpenMS/OpenMS, read directly
+# rather than from documentation, which lags): submodule-pinned contrib,
+# Eigen via choco, Qt via jurplel/install-qt-action, Arrow/Parquet/libzip via
+# conda, curl built from source into the contrib prefix. What differs is the
+# OpenMS configure/build itself -- OpenMS's own CI drives that through
+# tools/ci/cibuild.cmake, a ctest -S script that also submits to a CDash server
+# this project has no reason to talk to. Replaced here with a plain cmake
+# invocation that skips GUI, tests, docs and packaging, since FasTag needs only
+# the library, the headers and an installed OpenMSConfig.cmake.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    name: windows-x64
+    runs-on: windows-2022
+    # Unverified. A red Windows build must not block a green Linux/macOS one.
+    continue-on-error: true
+    # Generous on purpose: contrib alone can plausibly take an hour from a cold
+    # cache, and OpenMS's own C++ is large. Bound so a genuine hang cannot run
+    # indefinitely, not tuned to how long this SHOULD take -- that number is not
+    # known yet.
+    timeout-minutes: 240
+
+    env:
+      OPENMS_TAG: release/3.5.0
+      # The contrib commit release/3.5.0 pins as a submodule, read directly out
+      # of that tag rather than assumed: `git ls-tree release/3.5.0 -- contrib`
+      # in a local OpenMS checkout. Using this exact commit rather than contrib's
+      # own HEAD is deliberate -- a mismatched contrib is a plausible source of
+      # build failures that would look like an OpenMS or FasTag bug and is not.
+      CONTRIB_REV: 4bec7d958de69ff1201bd6f01a7d67ccaa5ae2bd
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fastag
+
+      # OpenMS contrib's CMakeLists shells out to cl.exe to decide the target
+      # word size and fails with "Could not determine if cl.exe builds x86 or
+      # x64 apps" without this -- already found the hard way earlier in this
+      # project's CI history (see ci.yml). Persists to every later step
+      # regardless of shell, since it writes to GITHUB_PATH/GITHUB_ENV.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: Check out OpenMS
+        run: git clone --depth 1 --branch $env:OPENMS_TAG https://github.com/OpenMS/OpenMS.git openms-src
+
+      - name: Check out contrib at the pinned commit
+        run: |
+          git init contrib-src
+          cd contrib-src
+          git remote add origin https://github.com/OpenMS/contrib.git
+          git fetch --depth 1 origin $env:CONTRIB_REV
+          git checkout FETCH_HEAD
+
+      # Keyed on the pinned commit, not on anything in this repo, so it survives
+      # across FasTag-side iteration and is only ever paid once per contrib
+      # revision -- which is the expensive part of this whole job.
+      - name: Cache contrib build
+        id: cache-contrib
+        uses: actions/cache@v4
+        with:
+          path: contrib-build
+          key: windows-x64-contrib-${{ env.CONTRIB_REV }}-v1
+
+      - name: Build contrib
+        if: steps.cache-contrib.outputs.cache-hit != 'true'
+        run: |
+          cmake -S contrib-src -B contrib-build -G "Visual Studio 17 2022" -A x64 -DBUILD_TYPE=ALL
+          cmake --build contrib-build --config Release
+
+      # Eigen and Ninja via choco, matching OpenMS's own recipe -- OpenMS's
+      # Windows CI points Eigen3_DIR at choco's copy rather than contrib's, so
+      # contrib's own Eigen (if BUILD_TYPE=ALL even produces one on this
+      # platform) is not what is used downstream.
+      - name: Install Eigen and Ninja
+        run: choco install -y --no-progress eigen ninja
+
+      # qtbase/qtsvg/qtimageformats: OpenMSConfig.cmake does find_dependency(Qt6)
+      # even with WITH_GUI=OFF, exactly as it does on the conda platforms (see
+      # ci.yml's qt6-main comment) -- Qt is a core-library dependency here, not
+      # only a GUI one.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: 'win64_msvc2022_64'
+          cache: 'false'
+          archives: 'qtbase qtsvg qtimageformats'
+
+      # Arrow/Parquet/libzip: OpenMS's own Windows CI installs these via conda
+      # and adds the env to CMAKE_PREFIX_PATH. bioconda's Linux/macOS `openms`
+      # package resolves the equivalent dependency invisibly, as part of the
+      # binary package; building from source means supplying it explicitly.
+      - name: Install Arrow, Parquet and libzip via conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          activate-environment: fastag-deps
+          python-version: '3.11'
+          use-mamba: true
+
+      - name: Configure conda packages and paths
+        shell: bash -el {0}
+        run: |
+          conda install -c conda-forge libarrow libparquet libzip -y
+          CONDA_ENV_PREFIX=$(conda info --json | python -c "import json,sys;print(json.load(sys.stdin)['active_prefix'])" | sed 's|\\|/|g')
+          echo "CONDA_LIB_PREFIX=$CONDA_ENV_PREFIX/Library" >> "$GITHUB_ENV"
+
+      # Built separately rather than via contrib, mirroring OpenMS's own recipe
+      # exactly -- installed into contrib-build so OPENMS_CONTRIB_LIBS covers it
+      # without a second prefix to track. CURL_USE_SCHANNEL uses Windows' native
+      # TLS instead of pulling in yet another dependency for that alone.
+      - name: Build libcurl from source
+        shell: bash
+        run: |
+          curl -L -o curl-src.tar.gz https://curl.se/download/curl-8.12.1.tar.gz
+          tar xzf curl-src.tar.gz
+          cd curl-8.12.1
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/contrib-build" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCURL_USE_SCHANNEL=ON \
+            -DBUILD_CURL_EXE=OFF \
+            -DBUILD_TESTING=OFF \
+            -DCURL_DISABLE_LDAP=ON \
+            -DCURL_USE_LIBPSL=OFF
+          cmake --build build
+          cmake --install build
+
+      - name: Configure OpenMS
+        shell: bash
+        run: |
+          # GUI, tests, docs and packaging all OFF: FasTag needs the library,
+          # the headers and an installed OpenMSConfig.cmake, nothing else. This
+          # is the one place this workflow deliberately diverges from OpenMS's
+          # own CI recipe rather than mirroring it -- their pipeline builds and
+          # tests all of OpenMS itself, which this has no reason to pay for.
+          cmake -S openms-src -B openms-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOPENMS_CONTRIB_LIBS="$GITHUB_WORKSPACE/contrib-build" \
+            -DWITH_GUI=OFF \
+            -DENABLE_TOPP_TESTING=OFF \
+            -DENABLE_CLASS_TESTING=OFF \
+            -DENABLE_DOCS=OFF \
+            -DENABLE_STYLE_TESTING=OFF \
+            -DENABLE_CWL=OFF \
+            -DMT_ENABLE_OPENMP=ON \
+            -DUSE_EXTERNAL_JSON=OFF \
+            -DEigen3_DIR="C:/ProgramData/chocolatey/lib/eigen/share/cmake" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$CONDA_LIB_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/openms-install"
+
+      - name: Build and install OpenMS
+        shell: bash
+        run: |
+          # No narrower --target: OpenMS's install() rules were not audited for
+          # which targets they actually require, and getting that wrong fails at
+          # install time having already paid for most of the build. Correctness
+          # over speed on a first attempt; worth narrowing once this succeeds
+          # once.
+          cmake --build openms-build --parallel
+          cmake --build openms-build --target install
+
+      - name: Verify OpenMS ships development files
+        shell: bash
+        run: |
+          CFG=$(find openms-install -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
+          if [ -z "$CFG" ]; then
+            echo "::error::No OpenMSConfig.cmake after install."
+            exit 1
+          fi
+          echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
+
+      - name: Configure FasTag
+        shell: bash
+        run: |
+          # Same Eigen3 range shim as every other platform; see ci.yml. Qt and
+          # the conda prefix must be on CMAKE_PREFIX_PATH again here, not only
+          # for OpenMS's own build -- OpenMSConfig.cmake's find_dependency(Qt6)
+          # runs again when FasTag configures against the install.
+          cmake -S fastag -B fastag/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOpenMS_DIR="$OPENMS_DIR" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$CONDA_LIB_PREFIX" \
+            -DEigen3_DIR="$GITHUB_WORKSPACE/fastag/cmake/eigen3-range-shim" \
+            -DEIGEN3_INCLUDE_DIR="C:/ProgramData/chocolatey/lib/eigen/share/cmake/../../include/eigen3"
+
+      - name: Build FasTag
+        shell: bash
+        run: cmake --build fastag/build --parallel
+
+      - name: Test
+        shell: bash
+        run: ctest --test-dir fastag/build --output-on-failure
+
+      - name: Smoke-test the binary
+        shell: bash
+        run: ./fastag/build/FasTag.exe --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FasTag-windows-x64
+          path: fastag/build/FasTag.exe
+          if-no-files-found: error
