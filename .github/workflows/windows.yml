@@ -295,110 +295,52 @@ jobs:
       - name: Locate OpenMSConfig.cmake
         shell: bash
         run: |
-          # Ground truth from a prior run's diagnostic listing: OpenMS's
-          # Windows install splits one logical CMake package directory across
-          # two destinations that never both contain everything needed --
-          # <prefix>/CMake/ has OpenMSConfig(Version).cmake and nothing else;
-          # <prefix>/bin/cmake/OpenMS/ has OpenMSTargets(.cmake|-release.cmake)
-          # and Modules/ (including FindLIBSVM.cmake) but no config file at
-          # all. Not fixable by picking a different single directory, since
-          # neither one is complete on its own -- copy the targets files
-          # OpenMSConfig.cmake's own include() expects beside it.
-          CFG=$(find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
-          if [ -z "$CFG" ]; then
-            echo "::error::No OpenMSConfig.cmake in the restored cache."
-            exit 1
-          fi
-          OPENMS_DIR=$(dirname "$CFG")
-          echo "OPENMS_DIR=$OPENMS_DIR" >> "$GITHUB_ENV"
-
+          # OpenMS's Windows install splits one logical CMake package
+          # directory across two destinations: <prefix>/CMake/ has only
+          # OpenMSConfig(Version).cmake; <prefix>/bin/cmake/OpenMS/ has
+          # OpenMSTargets(.cmake|-release.cmake) and Modules/ (FindLIBSVM.cmake
+          # etc). The previous three fixes copied Targets INTO CMake/, which
+          # was backwards: OpenMSTargets.cmake computes its own _IMPORT_PREFIX
+          # by walking a FIXED number of parent directories up from
+          # CMAKE_CURRENT_LIST_DIR, a count baked in at generation time to
+          # match ITS ORIGINAL install depth (bin/cmake/OpenMS/, three levels
+          # under the prefix). Moving the file to CMake/ (one level under the
+          # prefix) left that walk overshooting by two levels, landing one
+          # directory above the workspace root -- which is exactly the bogus
+          # "D:/a/FasTag/bin/OpenSwathAlgo.lib" this chased for three commits;
+          # it was never a hardcoded path, it was ${_IMPORT_PREFIX} computed
+          # from the wrong location.
+          #
+          # Fixed the other way around: leave OpenMSTargets.cmake and Modules/
+          # exactly where they already are (so _IMPORT_PREFIX and the config's
+          # own Modules/ prepend both compute correctly), and copy
+          # OpenMSConfig(Version).cmake IN to join them instead. OPENMS_DIR
+          # becomes that directory, which is now complete and self-consistent
+          # -- and CMAKE_MODULE_PATH no longer needs a separate LIBSVM
+          # workaround, since OpenMSConfig.cmake's own
+          # list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/Modules/")
+          # now finds its true sibling Modules/ directly.
           TARGETS_FILE=$(find "$WS/openms-install" -name 'OpenMSTargets.cmake' 2>/dev/null | head -1)
           if [ -z "$TARGETS_FILE" ]; then
             echo "::error::No OpenMSTargets.cmake anywhere in the restored cache."
             exit 1
           fi
-          # NOT piped through xargs: see the LIBSVM discovery step below for
-          # why that silently corrupts a backslash-containing Windows path.
-          TARGETS_DIR=$(dirname "$TARGETS_FILE")
-          cp -v "$TARGETS_DIR"/OpenMSTargets*.cmake "$OPENMS_DIR/"
+          OPENMS_DIR=$(dirname "$TARGETS_FILE")
 
-      # OpenMSTargets.cmake references at least one imported library
-      # (OpenSwathAlgo.lib, on the first real run to reach this point) by a
-      # hardcoded absolute path outside openms-install entirely
-      # (D:/a/FasTag/bin/OpenSwathAlgo.lib) rather than the ${_IMPORT_PREFIX}
-      # relocatable form every other target uses -- a build-tree path that
-      # leaked into what should be an install-relocatable export, inside
-      # OpenMS's own export(TARGETS) rules and not something to chase upstream
-      # mid-task. Self-healing rather than hardcoding OpenSwathAlgo by name,
-      # in case another target has the identical problem: find every absolute
-      # .lib/.dll path the targets files reference that does not exist, locate
-      # a real file with the same name anywhere in the install tree, and copy
-      # it into place at the exact path CMake expects.
-      - name: Patch hardcoded absolute paths in OpenMSTargets.cmake
-        shell: bash
-        run: |
-          # grep exits 1 (not an error) when nothing matches, and this step's
-          # default -e/pipefail killed the whole thing on that exit code with
-          # zero output on the first attempt -- silent, and easy to misread as
-          # "no hardcoded paths found" when it actually meant "this step never
-          # ran its body at all". `|| true` makes an empty match set the
-          # (entirely possible, and fine) no-op it should be.
-          # Both slash directions: the previous attempt only matched
-          # forward-slash paths and found nothing, which -e/pipefail then
-          # reported as a silent failure with no diagnostic at all rather than
-          # revealing whether the pattern was simply too narrow.
-          MATCHES=$(grep -ohE '"[A-Za-z]:[/\\][^"]+\.(lib|dll)"' "$OPENMS_DIR"/OpenMSTargets*.cmake | tr -d '"' | sort -u || true)
-          if [ -z "$MATCHES" ]; then
-            echo "no absolute .lib/.dll paths matched -- dumping context around OpenSwathAlgo instead:"
-            grep -B2 -A2 -i 'OpenSwathAlgo' "$OPENMS_DIR"/OpenMSTargets*.cmake || echo "(OpenSwathAlgo not mentioned at all in this copy)"
-          fi
-          echo "$MATCHES" | while read -r p; do
-            [ -z "$p" ] && continue
-            if [ ! -f "$p" ]; then
-              base=$(basename "$p")
-              real=$(find "$WS/openms-install" -name "$base" 2>/dev/null | head -1)
-              if [ -n "$real" ]; then
-                mkdir -p "$(dirname "$p")"
-                cp -v "$real" "$p"
-              else
-                echo "::error::$base is referenced at $p but no real copy exists anywhere in openms-install."
-                exit 1
-              fi
-            fi
-          done
-
-      # OpenMSConfig.cmake.in does
-      #   list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/Modules/")
-      # before find_dependency(LIBSVM 2.91), so this should be automatic -- and
-      # is, on Linux/macOS. On this Windows build OpenMS's own install put
-      # OpenMSConfig.cmake at <prefix>/CMake/ but FindLIBSVM.cmake at
-      # <prefix>/bin/cmake/OpenMS/Modules/, two unrelated directories, so the
-      # config's own relative prepend can never reach it. That split is
-      # something in OpenMS's own install() rules on this platform, not
-      # anything this workflow controls -- confirmed by listing the actual
-      # install tree in a prior run rather than guessed. Worked around by
-      # finding wherever it landed and adding that directory to
-      # CMAKE_MODULE_PATH explicitly, rather than assuming a fixed layout.
-      - name: Locate FindLIBSVM.cmake for CMAKE_MODULE_PATH
-        shell: bash
-        run: |
-          # NOT `find ... | xargs dirname`: xargs's default quoting treats a
-          # backslash as an escape character, and $GITHUB_WORKSPACE on Windows
-          # is backslash-separated (D:\a\FasTag\FasTag) -- piping that through
-          # xargs silently mangled it to D:aFasTagFasTag, which then failed to
-          # exist and made every previous attempt at this fix a no-op no
-          # matter what path was logically correct. Plain command substitution
-          # (as OPENMS_DIR already used successfully above) does not have this
-          # problem, since nothing re-parses the string as word-split input.
-          FOUND=$(find "$WS/openms-install" -iname 'FindLIBSVM.cmake' 2>/dev/null | head -1)
-          if [ -z "$FOUND" ]; then
-            echo "::error::No FindLIBSVM.cmake anywhere under openms-install."
+          CFG=$(find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
+          if [ -z "$CFG" ]; then
+            echo "::error::No OpenMSConfig.cmake in the restored cache."
             exit 1
           fi
-          MOD=$(dirname "$FOUND")
-          echo "OPENMS_MODULE_PATH=$MOD" >> "$GITHUB_ENV"
-          echo "discovered: $MOD"
-          ls -la "$MOD"
+          # NOT piped through xargs: xargs's default quoting treats a
+          # backslash as an escape character, and $WS/paths under it can still
+          # carry one from an upstream value -- silently corrupting the path
+          # rather than erroring, which cost several commits to track down
+          # earlier in this same job. Plain command substitution has no such
+          # problem.
+          cp -v "$CFG" "$(dirname "$CFG")"/OpenMSConfigVersion.cmake "$OPENMS_DIR/"
+
+          echo "OPENMS_DIR=$OPENMS_DIR" >> "$GITHUB_ENV"
 
       - name: Configure FasTag
         shell: bash
@@ -413,20 +355,12 @@ jobs:
           # which is a hint OpenMS's own CMakeLists reads at ITS configure time
           # and does not thread into the installed config file. Omitting
           # contrib-build here failed with "Failed to find XercesC" on the
-          # first real run; that one is fixed by CMAKE_PREFIX_PATH alone.
+          # first real run; that one is fixed by CMAKE_PREFIX_PATH alone. No
+          # separate CMAKE_MODULE_PATH is needed for LIBSVM any more -- see the
+          # step above.
           #
-          # CMAKE_MODULE_PATH carries FindLIBSVM.cmake's actual directory (see
-          # the step above) -- once loaded, FindLIBSVM.cmake's own find_path/
-          # find_library calls are satisfied by contrib-build already being on
-          # CMAKE_PREFIX_PATH, so no separate LIBSVM_DIR is needed.
-          #
-          # -x rather than a plain run: an earlier attempt at this exact fix
-          # produced an error with no visibility into whether the intended
-          # value actually reached the cmake invocation, and that turned out
-          # to matter (see QT_FWD below).
-          #
-          # QT_ROOT_DIR (set by jurplel/install-qt-action) is ALSO
-          # backslash-separated, same hazard as $GITHUB_WORKSPACE -- normalized
+          # QT_ROOT_DIR (set by jurplel/install-qt-action) is backslash-
+          # separated on Windows, same hazard as $GITHUB_WORKSPACE -- normalized
           # here since Qt is only ever consumed at this one point.
           set -x
           QT_FWD="${QT_ROOT_DIR//\\//}"
@@ -434,7 +368,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DOpenMS_DIR="$OPENMS_DIR" \
             -DCMAKE_PREFIX_PATH="$QT_FWD;$CONDA_LIB_PREFIX;$WS/contrib-build" \
-            -DCMAKE_MODULE_PATH="$OPENMS_MODULE_PATH" \
             -DEigen3_DIR="$WS/fastag/cmake/eigen3-range-shim" \
             -DEIGEN3_INCLUDE_DIR="C:/ProgramData/chocolatey/lib/eigen/share/cmake/../../include/eigen3"
 
