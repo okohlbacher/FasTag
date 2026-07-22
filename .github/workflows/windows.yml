@@ -310,6 +310,11 @@ jobs:
             exit 1
           fi
           echo "OPENMS_MODULE_PATH=$MOD" >> "$GITHUB_ENV"
+          # Printed rather than assumed: the previous attempt at this same fix
+          # produced the identical LIBSVM error with nothing in the log to say
+          # why, because this step never printed what it found.
+          echo "discovered: $MOD"
+          ls -la "$MOD"
 
       - name: Configure FasTag
         shell: bash
@@ -330,6 +335,12 @@ jobs:
           # the step above) -- once loaded, FindLIBSVM.cmake's own find_path/
           # find_library calls are satisfied by contrib-build already being on
           # CMAKE_PREFIX_PATH, so no separate LIBSVM_DIR is needed.
+          #
+          # -x rather than a plain run: the previous attempt at this exact fix
+          # produced the identical error with no visibility into whether
+          # OPENMS_MODULE_PATH actually reached the cmake invocation.
+          set -x
+          echo "OPENMS_MODULE_PATH=$OPENMS_MODULE_PATH"
           cmake -S fastag -B fastag/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DOpenMS_DIR="$OPENMS_DIR" \
