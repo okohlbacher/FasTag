@@ -234,6 +234,19 @@ jobs:
         with:
           path: fastag
 
+      # $GITHUB_WORKSPACE on Windows is backslash-separated (D:\a\FasTag\FasTag).
+      # Concatenating it with a forward-slash suffix (as every path below does)
+      # produces a path the filesystem tolerates fine but CMake does not
+      # everywhere: CMakeDetermineCompilerABI's generated try_compile scratch
+      # CMakeLists.txt embeds CMAKE_MODULE_PATH as a quoted CMake string
+      # literal, and CMake's OWN string escaping rejects '\a' as an unknown
+      # escape sequence -- "Invalid character escape '\a'". Every path derived
+      # from GITHUB_WORKSPACE in this job uses $WS instead, normalized once
+      # here rather than patched at each point of use.
+      - name: Normalize workspace path to forward slashes
+        shell: bash
+        run: echo "WS=${GITHUB_WORKSPACE//\\//}" >> "$GITHUB_ENV"
+
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: amd64
@@ -282,7 +295,7 @@ jobs:
       - name: Locate OpenMSConfig.cmake
         shell: bash
         run: |
-          CFG=$(find "$GITHUB_WORKSPACE/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
+          CFG=$(find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
           if [ -z "$CFG" ]; then
             echo "::error::No OpenMSConfig.cmake in the restored cache."
             exit 1
@@ -312,7 +325,7 @@ jobs:
           # matter what path was logically correct. Plain command substitution
           # (as OPENMS_DIR already used successfully above) does not have this
           # problem, since nothing re-parses the string as word-split input.
-          FOUND=$(find "$GITHUB_WORKSPACE/openms-install" -iname 'FindLIBSVM.cmake' 2>/dev/null | head -1)
+          FOUND=$(find "$WS/openms-install" -iname 'FindLIBSVM.cmake' 2>/dev/null | head -1)
           if [ -z "$FOUND" ]; then
             echo "::error::No FindLIBSVM.cmake anywhere under openms-install."
             exit 1
@@ -342,17 +355,22 @@ jobs:
           # find_library calls are satisfied by contrib-build already being on
           # CMAKE_PREFIX_PATH, so no separate LIBSVM_DIR is needed.
           #
-          # -x rather than a plain run: the previous attempt at this exact fix
-          # produced the identical error with no visibility into whether
-          # OPENMS_MODULE_PATH actually reached the cmake invocation.
+          # -x rather than a plain run: an earlier attempt at this exact fix
+          # produced an error with no visibility into whether the intended
+          # value actually reached the cmake invocation, and that turned out
+          # to matter (see QT_FWD below).
+          #
+          # QT_ROOT_DIR (set by jurplel/install-qt-action) is ALSO
+          # backslash-separated, same hazard as $GITHUB_WORKSPACE -- normalized
+          # here since Qt is only ever consumed at this one point.
           set -x
-          echo "OPENMS_MODULE_PATH=$OPENMS_MODULE_PATH"
+          QT_FWD="${QT_ROOT_DIR//\\//}"
           cmake -S fastag -B fastag/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DOpenMS_DIR="$OPENMS_DIR" \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$CONDA_LIB_PREFIX;$GITHUB_WORKSPACE/contrib-build" \
+            -DCMAKE_PREFIX_PATH="$QT_FWD;$CONDA_LIB_PREFIX;$WS/contrib-build" \
             -DCMAKE_MODULE_PATH="$OPENMS_MODULE_PATH" \
-            -DEigen3_DIR="$GITHUB_WORKSPACE/fastag/cmake/eigen3-range-shim" \
+            -DEigen3_DIR="$WS/fastag/cmake/eigen3-range-shim" \
             -DEIGEN3_INCLUDE_DIR="C:/ProgramData/chocolatey/lib/eigen/share/cmake/../../include/eigen3"
 
       - name: Build FasTag
