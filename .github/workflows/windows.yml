@@ -295,27 +295,32 @@ jobs:
       - name: Locate OpenMSConfig.cmake
         shell: bash
         run: |
-          # The "prefer a sibling OpenMSTargets.cmake" theory was wrong -- no
-          # copy of OpenMSConfig.cmake anywhere in the install tree has one
-          # next to it, confirmed by that exact search finding nothing on the
-          # previous run. Listing both sets in full rather than guessing a
-          # third time: either OpenMSTargets.cmake lives somewhere
-          # disconnected from every config copy (fixable from here), or it was
-          # never installed at all (an OpenMS-side install() gap, fixable only
-          # in the prep job).
-          echo "--- every OpenMSConfig.cmake ---"
-          find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>&1
-          echo "--- every OpenMSTargets.cmake ---"
-          find "$WS/openms-install" -name 'OpenMSTargets.cmake' 2>&1
-          echo "--- every *Targets*.cmake (in case it is named/versioned differently) ---"
-          find "$WS/openms-install" -iname '*Targets*.cmake' 2>&1
-
+          # Ground truth from a prior run's diagnostic listing: OpenMS's
+          # Windows install splits one logical CMake package directory across
+          # two destinations that never both contain everything needed --
+          # <prefix>/CMake/ has OpenMSConfig(Version).cmake and nothing else;
+          # <prefix>/bin/cmake/OpenMS/ has OpenMSTargets(.cmake|-release.cmake)
+          # and Modules/ (including FindLIBSVM.cmake) but no config file at
+          # all. Not fixable by picking a different single directory, since
+          # neither one is complete on its own -- copy the targets files
+          # OpenMSConfig.cmake's own include() expects beside it.
           CFG=$(find "$WS/openms-install" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
           if [ -z "$CFG" ]; then
             echo "::error::No OpenMSConfig.cmake in the restored cache."
             exit 1
           fi
-          echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
+          OPENMS_DIR=$(dirname "$CFG")
+          echo "OPENMS_DIR=$OPENMS_DIR" >> "$GITHUB_ENV"
+
+          TARGETS_FILE=$(find "$WS/openms-install" -name 'OpenMSTargets.cmake' 2>/dev/null | head -1)
+          if [ -z "$TARGETS_FILE" ]; then
+            echo "::error::No OpenMSTargets.cmake anywhere in the restored cache."
+            exit 1
+          fi
+          # NOT piped through xargs: see the LIBSVM discovery step below for
+          # why that silently corrupts a backslash-containing Windows path.
+          TARGETS_DIR=$(dirname "$TARGETS_FILE")
+          cp -v "$TARGETS_DIR"/OpenMSTargets*.cmake "$OPENMS_DIR/"
 
       # OpenMSConfig.cmake.in does
       #   list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/Modules/")
