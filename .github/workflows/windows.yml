@@ -288,27 +288,28 @@ jobs:
             exit 1
           fi
           echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
-          echo "OpenMSConfig.cmake at: $CFG"
-          echo "--- sibling contents ---"
-          ls -la "$(dirname "$CFG")"
-          echo "--- Modules/ contents, if any ---"
-          ls -la "$(dirname "$CFG")/Modules" 2>&1 || echo "(no Modules/ subdirectory here)"
-          echo "--- any FindLIBSVM.cmake anywhere in the install tree ---"
-          find openms-install -iname 'FindLIBSVM.cmake' 2>&1
 
-      # Find any contrib-built dependency's config file that is NOT where
-      # CMAKE_PREFIX_PATH would find it unaided, and pass its directory
-      # explicitly. LIBSVM is the first one this hit -- OpenMSConfig.cmake's
-      # find_dependency(LIBSVM) uses CONFIG mode, and contrib does not install
-      # LIBSVMConfig.cmake into any of the standard CMAKE_PREFIX_PATH-relative
-      # locations CMake searches automatically. Self-discovering rather than a
-      # hardcoded path: contrib's exact layout for a given library is not
-      # otherwise documented anywhere this workflow can cite.
-      - name: Locate contrib-built CMake configs CMAKE_PREFIX_PATH won't find
+      # OpenMSConfig.cmake.in does
+      #   list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/Modules/")
+      # before find_dependency(LIBSVM 2.91), so this should be automatic -- and
+      # is, on Linux/macOS. On this Windows build OpenMS's own install put
+      # OpenMSConfig.cmake at <prefix>/CMake/ but FindLIBSVM.cmake at
+      # <prefix>/bin/cmake/OpenMS/Modules/, two unrelated directories, so the
+      # config's own relative prepend can never reach it. That split is
+      # something in OpenMS's own install() rules on this platform, not
+      # anything this workflow controls -- confirmed by listing the actual
+      # install tree in a prior run rather than guessed. Worked around by
+      # finding wherever it landed and adding that directory to
+      # CMAKE_MODULE_PATH explicitly, rather than assuming a fixed layout.
+      - name: Locate FindLIBSVM.cmake for CMAKE_MODULE_PATH
         shell: bash
         run: |
-          find_dir() { find "$GITHUB_WORKSPACE/contrib-build" -iname "$1" 2>/dev/null | head -1 | xargs -r dirname; }
-          echo "LIBSVM_DIR=$(find_dir 'LIBSVMConfig.cmake')" >> "$GITHUB_ENV"
+          MOD=$(find openms-install -iname 'FindLIBSVM.cmake' 2>/dev/null | head -1 | xargs -r dirname)
+          if [ -z "$MOD" ]; then
+            echo "::error::No FindLIBSVM.cmake anywhere under openms-install."
+            exit 1
+          fi
+          echo "OPENMS_MODULE_PATH=$MOD" >> "$GITHUB_ENV"
 
       - name: Configure FasTag
         shell: bash
@@ -323,13 +324,17 @@ jobs:
           # which is a hint OpenMS's own CMakeLists reads at ITS configure time
           # and does not thread into the installed config file. Omitting
           # contrib-build here failed with "Failed to find XercesC" on the
-          # first real run; that specific one is fixed by CMAKE_PREFIX_PATH
-          # alone, LIBSVM needed the explicit _DIR above.
+          # first real run; that one is fixed by CMAKE_PREFIX_PATH alone.
+          #
+          # CMAKE_MODULE_PATH carries FindLIBSVM.cmake's actual directory (see
+          # the step above) -- once loaded, FindLIBSVM.cmake's own find_path/
+          # find_library calls are satisfied by contrib-build already being on
+          # CMAKE_PREFIX_PATH, so no separate LIBSVM_DIR is needed.
           cmake -S fastag -B fastag/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DOpenMS_DIR="$OPENMS_DIR" \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$CONDA_LIB_PREFIX;$GITHUB_WORKSPACE/contrib-build" \
-            -DLIBSVM_DIR="$LIBSVM_DIR" \
+            -DCMAKE_MODULE_PATH="$OPENMS_MODULE_PATH" \
             -DEigen3_DIR="$GITHUB_WORKSPACE/fastag/cmake/eigen3-range-shim" \
             -DEIGEN3_INCLUDE_DIR="C:/ProgramData/chocolatey/lib/eigen/share/cmake/../../include/eigen3"
 
