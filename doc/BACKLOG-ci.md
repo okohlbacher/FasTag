@@ -113,9 +113,6 @@ filesystem tolerates the mixed separators fine — both fixed by never piping a
 Windows path through `xargs`, and by normalizing every workspace/Qt path to
 forward slashes once, up front.
 
-**windows-arm64 remains out of scope**, per the original assessment: OpenMS
-has no known ARM Windows support. Revisit only if that changes upstream.
-
 ## Anything else worth knowing
 
 - `cancel-in-progress: true` in both workflows, for the reason given above: a
