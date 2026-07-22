@@ -26,31 +26,43 @@ Not one was visible on any machine that had built FasTag before — laptop and H
 both had Eigen worked around by hand and Boost/Qt supplied by contrib. These are
 what a new user hits on a clean machine.
 
-## macOS
+## macOS — arm64 GREEN, x64 on trial
 
-**Status: unverified, and closer than it looks.** bioconda ships OpenMS 3.5.0 for
-both `osx-64` and `osx-arm64`, so the conda path applies unchanged. macos-arm64
-failed on issue 5, which is now fixed — it plausibly passes as-is.
+Both are back in the matrix. The earlier diagnosis in this file was wrong in a
+way worth recording.
 
-The real obstacle is **macos-x64 was never once built**. `macos-13` is the last
-Intel runner and is scarce; across six consecutive runs it sat queued while each
-new push cancelled the run out from under it. `cancel-in-progress` is now off,
-which should let it schedule.
+**macos-arm64 passes.** Not a prediction — it completed successfully in run
+29857387912, in the very matrix that was then removed. bioconda's `osx-arm64`
+OpenMS 3.5.0 works with the conda path unchanged; `QT_HOST_PATH` (issue 5) was
+all it needed.
 
-Note it read as *"queued"* rather than *"unverified"* — an untested platform
-looking merely slow in an otherwise-green matrix is the more dangerous of the
-two states, and is the reason it is called out here rather than left implicit.
+**macos-x64 was never a scheduling delay. `macos-13` is retired.** This file
+previously said the runner was "scarce" and that turning off `cancel-in-progress`
+"should let it schedule". It did not, because no runner was ever going to pick it
+up — and turning off cancellation converted an impossible job into an **outage**:
+that run sat `queued` holding the `refs/heads/main` concurrency group, and every
+push to main was blocked behind it for about a day. It took cancelling the run by
+hand to clear. The v0.9.0 tag build passed throughout only because tags get their
+own concurrency group, which made main look merely slow rather than stuck.
 
-To re-enable, restore to the matrix:
+Now on `macos-15-intel`, GitHub's replacement Intel label, and **on trial**. If it
+does not schedule either, delete the target. This file's own advice applies and is
+now backed by an incident: *an untested platform that looks merely "queued" is
+more dangerous than one that is openly missing.*
 
-```yaml
-- { name: macos-x64,   runner: macos-13 }
-- { name: macos-arm64, runner: macos-14 }
-```
+Two changes make a repeat impossible to hide:
 
-Expect macos-arm64 to pass. Watch macos-13 for scheduling rather than build
-failure — and if Intel runners are retired, drop that target rather than pretend
-it is covered.
+- `cancel-in-progress: true` — a wedge is now superseded by the next push instead
+  of blocking it. The starvation this was meant to prevent had a different cause.
+- `timeout-minutes: 40` — bounds a job that hangs. Note it does **not** bound a
+  job waiting for a runner; GitHub starts that clock only once the job is picked
+  up. The only defence against an unschedulable label is not to name one.
+
+The local macOS **curl framework** caveat still stands and CI cannot catch it: a
+third-party `/Library/Frameworks/libcurl.framework` shadows the SDK libcurl that
+`libOpenMS.dylib` links, and the binary dies at startup. `CMakeLists.txt` pins
+curl to the SDK; a clean runner has no such framework, so a regression there would
+pass CI and fail on a developer's machine.
 
 There is a local caveat the CI does not exercise: the macOS **curl framework**
 problem. CMake searches frameworks first, so a third-party

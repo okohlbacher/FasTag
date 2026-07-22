@@ -1,11 +1,11 @@
 name: build
 
-# Linux x64 and arm64. Both green.
+# Linux x64/arm64 and macOS arm64 are green. macOS x64 is on trial.
 #
-# macOS and Windows are deliberately NOT here yet -- see doc/BACKLOG-ci.md for
-# what each needs and what is already known about them. Carrying jobs that have
-# never passed teaches the habit of ignoring red, which costs more than the
-# coverage buys.
+# Windows is deliberately NOT here -- see doc/BACKLOG-ci.md. It is the only
+# platform with no OpenMS conda package, so it must build OpenMS AND contrib from
+# source, 30-60 minutes against two. Carrying a job that has never passed teaches
+# the habit of ignoring red, which costs more than the coverage buys.
 #
 # The job VERIFIES that OpenMSConfig.cmake actually exists before configuring. A
 # package that ships tools but no development files would otherwise fail deep
@@ -18,31 +18,53 @@ on:
   pull_request:
   workflow_dispatch:
 
-# cancel-in-progress is deliberately OFF.
+# cancel-in-progress is ON, after turning it off caused something worse.
 #
-# It is the usual default and it starved a job here. macos-13 is the last Intel
-# runner and is scarce, so macos-x64 sat queued while every subsequent push
-# cancelled the run out from under it -- across six consecutive runs it never
-# executed once, and an untested platform sat in the matrix looking merely
-# "queued" rather than unverified.
+# The history is worth keeping, because the first diagnosis was wrong. macos-x64
+# never executed across six consecutive runs, and that was read as aggressive
+# cancellation starving a scarce runner -- so this was set to `false`.
 #
-# This repo does not have the traffic to need aggressive cancellation, and a
-# stale run finishing is cheaper than a platform silently never being built.
+# The real cause was that `macos-13` is RETIRED and no runner would ever pick the
+# job up. Turning cancellation off did not fix that; it converted a job that
+# could not run into a permanent head-of-line block. Run 29857387912 sat `queued`
+# on its macos-x64 job holding the refs/heads/main concurrency group, and EVERY
+# subsequent push to main was blocked behind it for about a day. The v0.9.0 tag
+# build passed only because tags land in a different group.
+#
+# Two lessons, both encoded below: an unschedulable runner label is a wedge, not
+# a delay; and `cancel-in-progress: false` turns any wedge into an outage.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   # ---------------------------------------------------------------- conda path
-  linux:
+  build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    # A ceiling, not an estimate. Linux finishes in ~4 minutes; this exists so a
+    # job that hangs dies rather than holding a concurrency group. It does NOT
+    # cover a job stuck waiting for a runner -- GitHub only starts this clock once
+    # the job is picked up, which is exactly the case that wedged this repo. The
+    # protection against that is not naming labels that do not exist.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
           - { name: linux-x64,   runner: ubuntu-24.04 }
           - { name: linux-arm64, runner: ubuntu-24.04-arm }
+          # macos-arm64 is not speculative: it PASSED in run 29857387912, in the
+          # same matrix whose macos-x64 job wedged the queue. bioconda ships
+          # osx-arm64 OpenMS 3.5.0, and QT_HOST_PATH below is what it needed.
+          - { name: macos-arm64, runner: macos-14 }
+          # Intel macOS, on trial. `macos-13` is retired -- that is established,
+          # not suspected, and it is what caused the outage described above.
+          # macos-15-intel is GitHub's replacement label. If this does not
+          # schedule either, DROP the target rather than leave it amber: an
+          # untested platform that looks merely "queued" is the more dangerous of
+          # the two states, which is the whole lesson of this file.
+          - { name: macos-x64,   runner: macos-15-intel }
 
     steps:
       - uses: actions/checkout@v4
