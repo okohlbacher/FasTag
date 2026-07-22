@@ -33,6 +33,12 @@ Prebuilt binaries for every platform CI covers, from the
 | macOS arm64 | [FasTag-macos-arm64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-macos-arm64.tar.gz) |
 | Windows x64 | [FasTag-windows-x64.zip](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-windows-x64.zip) |
 
+Each archive extracts to a `FasTag/` folder — run `FasTag/FasTag` (Linux/macOS)
+or `FasTag/FasTag.bat` (Windows), not a `.bin`/`.core.exe` file sitting next to
+it. Those are the real executables; the wrapper next to them points OpenMS at
+the bundled `lib/`/DLLs and `share-OpenMS/` data directory the tool needs, none
+of which travel with a bare binary linked against a conda-provided OpenMS.
+
 **Not code-signed.** macOS Gatekeeper and Windows SmartScreen will both warn on
 first run — that's expected until a Developer ID certificate (macOS) and a
 SignPath Foundation enrollment (Windows) are in place; both workflows already

@@ -491,10 +491,94 @@ jobs:
             Write-Host "::warning::SignPath step ran but no signed artifact found under signed/"
           }
 
+      # ---------------------------------------------------------------------
+      # Bundle runtime dependencies for portability -- EVERY run, not just
+      # releases. FasTag.exe as built above depends on DLLs (OpenMS, Qt,
+      # contrib's curl/XercesC, conda's Arrow/Parquet) that only exist in
+      # THIS job's own build environment; Windows has no RPATH/RUNPATH, so
+      # the loader only searches the .exe's own directory and PATH, and
+      # nothing on a bare download provides either. The exact same class of
+      # bug shipped once already on macOS/Linux (an RPATH pointing at
+      # /Users/runner/micromamba/..., discovered only when a real user
+      # downloaded the release and ran it) -- fixed there the same way:
+      # bundle everything the runtime actually needs, verify it standalone,
+      # every push.
+      #
+      # Order matters not at all here, unlike macOS: Authenticode signs the
+      # .exe file itself, so copying unrelated DLLs into the same folder
+      # afterward cannot invalidate a signature already applied above --
+      # this step runs after signing purely because it needs whichever copy
+      # (signed or not) is currently in fastag/build/FasTag.exe.
+      #
+      # DLL set is deliberately generous rather than minimal: every
+      # directory this job itself already needed on PATH to run its OWN
+      # ctest/smoke-test (see "Add runtime DLL directories to PATH" above)
+      # is copied wholesale, rather than guessing a narrower set with no way
+      # to verify it on a machine that actually has Windows.
+      #
+      # share/OpenMS's location is found by searching rather than assumed:
+      # this same install already turned out to split its CMake package
+      # across two unrelated directories on this platform (see
+      # doc/BACKLOG-ci.md), so trusting a "normal" <prefix>/share/OpenMS
+      # layout without checking would be the same mistake twice.
+      - name: Bundle runtime dependencies for portability (Windows)
+        shell: bash
+        run: |
+          set -e
+          rm -rf dist && mkdir -p dist/FasTag
+          cp fastag/build/FasTag.exe dist/FasTag/FasTag.core.exe
+
+          for d in "$WS/openms-install/bin" "$WS/contrib-build/bin" "$QT_ROOT_DIR/bin" "$CONDA_LIB_PREFIX/bin"; do
+            [ -d "$d" ] && cp -n "$d"/*.dll dist/FasTag/ 2>/dev/null || true
+          done
+
+          SHARE_DIR=$(find "$WS/openms-install" -type d -path '*/share/OpenMS' 2>/dev/null | head -1)
+          if [ -z "$SHARE_DIR" ]; then
+            echo "::error::Could not find OpenMS's share/ data directory anywhere under openms-install."
+            exit 1
+          fi
+          cp -r "$SHARE_DIR" dist/FasTag/share-OpenMS
+
+          # A .bat wrapper, not a shell script: this is Windows. The real
+          # exe is named FasTag.core.exe (not FasTag.exe) specifically so
+          # typing the bare command `FasTag` at a prompt resolves to this
+          # wrapper via PATHEXT rather than racing it -- if both
+          # FasTag.exe and FasTag.bat existed side by side, PATHEXT's
+          # default order tries .EXE before .BAT and would silently skip
+          # the wrapper.
+          printf '%s\r\n' \
+            '@echo off' \
+            'set "OPENMS_DATA_PATH=%~dp0share-OpenMS"' \
+            '"%~dp0FasTag.core.exe" %*' \
+            > dist/FasTag/FasTag.bat
+          ls dist/FasTag | wc -l
+
+      # Same regression guard as ci.yml, adapted for Windows: no RPATH to
+      # strip, so the honest test is running with the DLL search directories
+      # this job added to PATH earlier explicitly removed, from a directory
+      # outside the build tree. Reaching OpenMS's own "file not found" error
+      # proves every DLL AND the shared data directory resolved from the
+      # bundle itself, not from this job's PATH.
+      - name: Verify the bundle is portable (regression guard)
+        shell: bash
+        run: |
+          set -e
+          CLEAN_PATH=$(echo "$PATH" | tr ':' '\n' | grep -viE "openms-install|contrib-build|Qt|conda|miniconda" | tr '\n' ':')
+          OUT=$(cd /tmp && PATH="$CLEAN_PATH" "$GITHUB_WORKSPACE/dist/FasTag/FasTag.bat" -in nonexistent.mzML -out /tmp/portability-check.tsv 2>&1) || true
+          echo "$OUT"
+          if echo "$OUT" | grep -qiE "0xc0000135|not found.*\.dll|shared data"; then
+            echo "::error::Bundle is NOT portable -- still resolves something from the build environment. See output above."
+            exit 1
+          fi
+          echo "$OUT" | grep -q "File not found" || { echo "::error::Unexpected output -- never reached the expected 'file not found' error."; exit 1; }
+          echo "Portability check passed: runs standalone, no build-environment leakage."
+
       # Same mechanism as ci.yml's identical step -- see there for why the
       # filename carries no version and why the create-or-fail-harmlessly
       # pattern is safe across two independent workflows racing to attach to
-      # the same release.
+      # the same release. Archives the WHOLE dist/FasTag/ folder now, not a
+      # single file: users run FasTag.bat (or bare `FasTag`), not the
+      # FasTag.core.exe it calls.
       - name: Attach binary to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -510,5 +594,5 @@ jobs:
           # confirmed present in this runner's Git-for-Windows bundle. Every
           # Windows box has PowerShell, so this has no such gap.
           powershell -NoProfile -Command \
-            "Compress-Archive -Path '$WS/fastag/build/FasTag.exe' -DestinationPath 'FasTag-windows-x64.zip' -Force"
+            "Compress-Archive -Path '$WS/dist/FasTag' -DestinationPath 'FasTag-windows-x64.zip' -Force"
           gh release upload "${{ github.ref_name }}" FasTag-windows-x64.zip --clobber

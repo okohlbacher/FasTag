@@ -81,20 +81,23 @@ jobs:
           # the build currently holds by accident into one it holds by contract.
           #
           # Linux gets OpenMP from the gcc toolchain; adding llvm-openmp there
-          # risks clashing with libgomp.
-          - { name: linux-x64,   runner: ubuntu-24.04,     extra: "" }
-          - { name: linux-arm64, runner: ubuntu-24.04-arm, extra: "" }
+          # risks clashing with libgomp. patchelf is the release-packaging
+          # step's tool for rewriting RPATH to a relative, portable location.
+          - { name: linux-x64,   runner: ubuntu-24.04,     extra: "patchelf" }
+          - { name: linux-arm64, runner: ubuntu-24.04-arm, extra: "patchelf" }
           # macos-arm64 is not speculative: it PASSED in run 29857387912, in the
           # same matrix whose macos-x64 job wedged the queue. bioconda ships
           # osx-arm64 OpenMS 3.5.0, and QT_HOST_PATH below is what it needed.
-          - { name: macos-arm64, runner: macos-14, extra: "llvm-openmp" }
+          # dylibbundler is the release-packaging step's tool -- the macOS
+          # equivalent of patchelf above.
+          - { name: macos-arm64, runner: macos-14, extra: "llvm-openmp dylibbundler" }
           # Intel macOS. `macos-13` is retired -- established, not suspected, and
           # the cause of the outage described above. macos-15-intel is GitHub's
           # replacement label; it schedules and passes. If it is ever retired in
           # turn, DROP the target rather than leave it amber: an untested platform
           # that looks merely "queued" is the more dangerous of the two states,
           # which is the whole lesson of this file.
-          - { name: macos-x64,   runner: macos-15-intel, extra: "llvm-openmp" }
+          - { name: macos-x64,   runner: macos-15-intel, extra: "llvm-openmp dylibbundler" }
 
     steps:
       - uses: actions/checkout@v4
@@ -239,19 +242,159 @@ jobs:
           if-no-files-found: error
 
       # ---------------------------------------------------------------------
+      # Bundle runtime dependencies for portability -- EVERY run, not just
+      # releases. This is what a real user's download of an earlier release
+      # failed on:
+      #
+      #   dyld: Library not loaded: @rpath/libOpenMS.dylib
+      #     tried: '/Users/runner/micromamba/envs/fastag/lib/libOpenMS.dylib'
+      #
+      # `build/FasTag` as produced above carries an RPATH pointing at THIS
+      # JOB's own conda environment, which obviously does not exist on a
+      # machine that only downloaded the release tarball -- true on Linux
+      # (RPATH /home/runner/micromamba/envs/fastag/lib) exactly as much as
+      # macOS. Running this on every push, not just tags, means a regression
+      # here fails CI immediately instead of shipping silently to the next
+      # release, which is exactly what happened once already.
+      #
+      # Two things needed bundling that are easy to miss from a single
+      # `ldd`/`otool -L` on the executable alone, both found only by actually
+      # running the result and reading the error, not by static inspection:
+      #   - Linux only: libblas.so.3/libcblas.so.3/liblapack.so.3/
+      #     liblapacke.so.3 are all symlinks to ONE real OpenBLAS file,
+      #     loaded via dlopen() rather than a normal NEEDED entry -- invisible
+      #     to ldd. conda-forge's BLAS/LAPACK "mutex" package pattern.
+      #   - Both platforms: OpenMS's own share/ data directory (enzyme,
+      #     modification and CV databases) -- needed even just to fail
+      #     cleanly on a missing input file, at least on Linux; bundled on
+      #     macOS too rather than relying on an unexplained platform
+      #     difference (real local testing showed macOS did not hit this,
+      #     but the underlying reason is not understood well enough to trust
+      #     it holding on a future OpenMS rebuild). A wrapper script
+      #     (FasTag -> FasTag.bin) sets OPENMS_DATA_PATH relative to itself
+      #     before exec'ing the real binary, rather than assuming an install
+      #     location that does not exist on a bare download.
+      - name: Bundle runtime dependencies for portability (Linux)
+        if: runner.os == 'Linux'
+        shell: bash -el {0}
+        run: |
+          set -e
+          rm -rf dist && mkdir -p dist/FasTag/lib
+          cp build/FasTag dist/FasTag/FasTag.bin
+
+          LIBDIR="$CONDA_PREFIX/lib"
+          ldd dist/FasTag/FasTag.bin | grep "$LIBDIR" | awk '{print $1}' | sort -u > /tmp/needed.txt
+
+          while read -r name; do
+            [ -z "$name" ] && continue
+            if [ -L "$LIBDIR/$name" ]; then
+              real=$(readlink -f "$LIBDIR/$name")
+              realname=$(basename "$real")
+              [ -f "dist/FasTag/lib/$realname" ] || cp -L "$real" "dist/FasTag/lib/$realname"
+              [ -e "dist/FasTag/lib/$name" ] || ln -s "$realname" "dist/FasTag/lib/$name"
+            else
+              cp -L "$LIBDIR/$name" "dist/FasTag/lib/$name"
+            fi
+          done < /tmp/needed.txt
+
+          # dlopen-only BLAS/LAPACK backend aliases -- see the comment above.
+          for alias in libblas.so.3 libcblas.so.3 liblapack.so.3 liblapacke.so.3; do
+            if [ -L "$LIBDIR/$alias" ] && [ ! -e "dist/FasTag/lib/$alias" ]; then
+              real=$(readlink -f "$LIBDIR/$alias")
+              realname=$(basename "$real")
+              [ -f "dist/FasTag/lib/$realname" ] || cp -L "$real" "dist/FasTag/lib/$realname"
+              ln -s "$realname" "dist/FasTag/lib/$alias"
+            fi
+          done
+
+          patchelf --set-rpath '$ORIGIN/lib' dist/FasTag/FasTag.bin
+          for so in dist/FasTag/lib/*.so*; do
+            [ -L "$so" ] && continue
+            patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
+          done
+
+          cp -r "$CONDA_PREFIX/share/OpenMS" dist/FasTag/share-OpenMS
+          # printf, not a heredoc: a heredoc's body has to be indented to
+          # satisfy YAML's block-scalar rules, but leading whitespace before
+          # `#!` breaks shebang recognition -- the kernel requires it at byte
+          # offset 0. Each argument is single-quoted so $HERE/$0/$@ are
+          # written LITERALLY, meant for the wrapper script to expand when
+          # IT runs later, not for this outer shell to expand now.
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
+            'export OPENMS_DATA_PATH="$HERE/share-OpenMS"' \
+            'exec "$HERE/FasTag.bin" "$@"' \
+            > dist/FasTag/FasTag
+          chmod +x dist/FasTag/FasTag dist/FasTag/FasTag.bin
+          du -sh dist/FasTag
+
+      - name: Bundle runtime dependencies for portability (macOS)
+        if: runner.os == 'macOS'
+        shell: bash -el {0}
+        run: |
+          set -e
+          rm -rf dist && mkdir -p dist/FasTag
+          cp build/FasTag dist/FasTag/FasTag.bin
+
+          dylibbundler -od -b \
+            -x dist/FasTag/FasTag.bin \
+            -d dist/FasTag/lib \
+            -p '@executable_path/lib/' \
+            -s "$CONDA_PREFIX/lib"
+
+          cp -r "$CONDA_PREFIX/share/OpenMS" dist/FasTag/share-OpenMS
+          # printf, not a heredoc: a heredoc's body has to be indented to
+          # satisfy YAML's block-scalar rules, but leading whitespace before
+          # `#!` breaks shebang recognition -- the kernel requires it at byte
+          # offset 0. Each argument is single-quoted so $HERE/$0/$@ are
+          # written LITERALLY, meant for the wrapper script to expand when
+          # IT runs later, not for this outer shell to expand now.
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
+            'export OPENMS_DATA_PATH="$HERE/share-OpenMS"' \
+            'exec "$HERE/FasTag.bin" "$@"' \
+            > dist/FasTag/FasTag
+          chmod +x dist/FasTag/FasTag dist/FasTag/FasTag.bin
+          du -sh dist/FasTag
+
+      # The actual regression guard: run the bundle exactly the way a user
+      # who only downloaded the tarball would, and fail the build if it
+      # resolves anything from this job's own build environment. Deliberately
+      # NOT `bash -el {0}` -- that activates the conda env, which is exactly
+      # the crutch a real download does not have. `-in nonexistent.mzML`
+      # needs no test fixture: reaching OpenMS's own "file not found" error
+      # proves every library AND the shared data directory resolved
+      # correctly, since both are needed before that check ever runs.
+      - name: Verify the bundle is portable (regression guard)
+        shell: bash
+        run: |
+          set -e
+          unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH CONDA_PREFIX
+          OUT=$(cd /tmp && "$GITHUB_WORKSPACE/dist/FasTag/FasTag" -in nonexistent.mzML -out /tmp/portability-check.tsv 2>&1) || true
+          echo "$OUT"
+          if echo "$OUT" | grep -qiE "library not loaded|cannot open shared object|shared data|dyld|error while loading"; then
+            echo "::error::Bundle is NOT portable -- still resolves something from the build environment. See output above."
+            exit 1
+          fi
+          echo "$OUT" | grep -q "File not found" || { echo "::error::Unexpected output -- never reached the expected 'file not found' error."; exit 1; }
+          echo "Portability check passed: runs standalone, no build-environment leakage."
+
+      # ---------------------------------------------------------------------
       # macOS code signing + notarization, release builds only.
       #
       # Adapted from a working reference (BALL/BALLView's release.yml), not
       # invented -- but that project ships a Qt .app bundle via macdeployqt
-      # and a signed .dmg via create-dmg; FasTag ships one bare CLI
-      # executable, so none of that packaging machinery applies, and one
-      # thing does NOT carry over: `stapler staple` only works on .app
-      # bundles, .pkg installers and disk images, never a lone Mach-O
-      # binary -- Apple's own documented limitation, not an oversight here.
-      # A notarized standalone binary is verified by Gatekeeper via an
+      # and a signed .dmg via create-dmg; FasTag ships a bundled folder, not
+      # an .app, so none of that packaging machinery applies, and one thing
+      # does NOT carry over: `stapler staple` only works on .app bundles,
+      # .pkg installers and disk images, never a lone Mach-O binary or a
+      # plain folder -- Apple's own documented limitation, not an oversight
+      # here. A notarized standalone binary is verified by Gatekeeper via an
       # ONLINE ticket lookup on first run instead, which needs network
-      # access that one time. There is no staple step below because there
-      # is nothing for it to attach to.
+      # access that one time. There is no staple step below because there is
+      # nothing for it to attach to.
       #
       # Gated the same way as the release-upload step above and the
       # SignPath step in windows.yml: `secrets.X != ''` directly in an `if:`
@@ -299,14 +442,22 @@ jobs:
           security find-identity -p codesigning -v "$KEYCHAIN_PATH"
           rm -f "$CERT_PATH"
 
+      # Every dylib first, THEN the executable: codesigning it checks its
+      # dependencies' own signatures too, so they need a real signature in
+      # place beforehand -- dylibbundler's own internal codesign call uses an
+      # ad-hoc identity ("-"), which notarization does not accept.
       - name: Codesign FasTag with Developer ID + hardened runtime (macOS)
         if: steps.mac-signing.outputs.enabled == 'true'
         shell: bash
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
-          codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" --timestamp build/FasTag
-          codesign --verify --strict --verbose=2 build/FasTag
+          for dylib in dist/FasTag/lib/*.dylib; do
+            [ -L "$dylib" ] && continue
+            codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" --timestamp "$dylib"
+          done
+          codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" --timestamp dist/FasTag/FasTag.bin
+          codesign --verify --strict --verbose=2 dist/FasTag/FasTag.bin
 
       - name: Submit to Apple notary + wait (macOS)
         if: steps.mac-signing.outputs.enabled == 'true'
@@ -317,7 +468,7 @@ jobs:
           MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
           MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         run: |
-          ditto -c -k --keepParent build/FasTag "${RUNNER_TEMP}/FasTag-notarize.zip"
+          ditto -c -k --keepParent dist/FasTag "${RUNNER_TEMP}/FasTag-notarize.zip"
           xcrun notarytool submit "${RUNNER_TEMP}/FasTag-notarize.zip" \
             --apple-id "$MACOS_APPLE_ID" --team-id "$MACOS_TEAM_ID" \
             --password "$MACOS_NOTARY_PASSWORD" --wait
@@ -345,6 +496,9 @@ jobs:
       # afterward without touching assets); every later entry's create call
       # fails harmlessly because it already exists, then --clobber lets each
       # attach its own binary regardless of arrival order.
+      #
+      # Archives the WHOLE dist/FasTag/ folder now, not a single file: users
+      # run FasTag/FasTag (the wrapper), not the FasTag.bin it execs.
       - name: Attach binary to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash -el {0}
@@ -355,8 +509,5 @@ jobs:
             --title "${{ github.ref_name }}" \
             --notes "Automated binary upload; release notes pending." \
             2>/dev/null || true
-          mkdir -p dist
-          cp build/FasTag dist/FasTag
-          chmod +x dist/FasTag
           tar -C dist -czf "FasTag-${{ matrix.name }}.tar.gz" FasTag
           gh release upload "${{ github.ref_name }}" "FasTag-${{ matrix.name }}.tar.gz" --clobber
