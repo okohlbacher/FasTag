@@ -375,6 +375,23 @@ jobs:
         shell: bash
         run: cmake --build fastag/build --parallel
 
+      # Build and link both succeeded; every test/benchmark binary that links
+      # OpenMS then failed at RUN time with exit code 0xc0000135
+      # (STATUS_DLL_NOT_FOUND) -- ranksum_test, which has no OpenMS dependency,
+      # passed fine. Windows has no RPATH/RUNPATH equivalent baked into the
+      # binary at link time the way Linux/macOS do; the loader only searches
+      # the .exe's own directory and PATH. None of OpenMS's, Qt's, contrib's or
+      # conda's DLL directories were ever added to PATH, only used as CMake
+      # search hints at configure time -- a separate concern the build/link
+      # step never needed.
+      - name: Add runtime DLL directories to PATH
+        shell: bash
+        run: |
+          echo "$WS/openms-install/bin" >> "$GITHUB_PATH"
+          echo "$WS/contrib-build/bin" >> "$GITHUB_PATH"
+          echo "$QT_ROOT_DIR/bin" >> "$GITHUB_PATH"
+          echo "$CONDA_LIB_PREFIX/bin" >> "$GITHUB_PATH"
+
       - name: Test
         shell: bash
         run: ctest --test-dir fastag/build --output-on-failure
