@@ -585,7 +585,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # --repo explicitly: this job's checkout lives at $WS/fastag (the
+          # "path: fastag" above), so $GITHUB_WORKSPACE itself -- this step's
+          # default cwd -- has no .git for gh to auto-detect the repo from.
+          # Without --repo, both calls below fail with "not a git repository".
           gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --notes "Automated binary upload; release notes pending." \
             2>/dev/null || true
@@ -595,4 +600,5 @@ jobs:
           # Windows box has PowerShell, so this has no such gap.
           powershell -NoProfile -Command \
             "Compress-Archive -Path '$WS/dist/FasTag' -DestinationPath 'FasTag-windows-x64.zip' -Force"
-          gh release upload "${{ github.ref_name }}" FasTag-windows-x64.zip --clobber
+          gh release upload "${{ github.ref_name }}" FasTag-windows-x64.zip --clobber \
+            --repo "${{ github.repository }}"
