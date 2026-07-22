@@ -228,6 +228,11 @@ jobs:
     name: windows-x64
     runs-on: windows-2022
     needs: windows-x64-openms
+    # write, not the default: needed only for the tag-triggered release-asset
+    # upload below; see ci.yml's identical comment for why this is safe on
+    # pull_request runs from forks.
+    permissions:
+      contents: write
     timeout-minutes: 45
 
     steps:
@@ -406,3 +411,25 @@ jobs:
           name: FasTag-windows-x64
           path: fastag/build/FasTag.exe
           if-no-files-found: error
+
+      # Same mechanism as ci.yml's identical step -- see there for why the
+      # filename carries no version and why the create-or-fail-harmlessly
+      # pattern is safe across two independent workflows racing to attach to
+      # the same release.
+      - name: Attach binary to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "Automated binary upload; release notes pending." \
+            2>/dev/null || true
+          # Compress-Archive, not zip: unlike every other tool this workflow
+          # already leans on (find, dirname, grep), zip.exe was never actually
+          # confirmed present in this runner's Git-for-Windows bundle. Every
+          # Windows box has PowerShell, so this has no such gap.
+          powershell -NoProfile -Command \
+            "Compress-Archive -Path '$WS/fastag/build/FasTag.exe' -DestinationPath 'FasTag-windows-x64.zip' -Force"
+          gh release upload "${{ github.ref_name }}" FasTag-windows-x64.zip --clobber

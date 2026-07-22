@@ -20,6 +20,25 @@ is built against provides `MzPeakFile`** — configure reports which you have.
 Output is mzML and TSV. Read [the caveat](#mzpeak-input) before pointing mzPeak
 at a large file.
 
+## Downloads
+
+Prebuilt binaries for every platform CI covers, from the
+[latest release](https://github.com/okohlbacher/FasTag/releases/latest):
+
+| platform | download |
+|---|---|
+| Linux x64 | [FasTag-linux-x64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-linux-x64.tar.gz) |
+| Linux arm64 | [FasTag-linux-arm64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-linux-arm64.tar.gz) |
+| macOS x64 | [FasTag-macos-x64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-macos-x64.tar.gz) |
+| macOS arm64 | [FasTag-macos-arm64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-macos-arm64.tar.gz) |
+| Windows x64 | [FasTag-windows-x64.zip](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-windows-x64.zip) |
+
+**Not code-signed.** macOS Gatekeeper and Windows SmartScreen will both warn on
+first run — that's expected until a Developer ID (macOS) and an Authenticode
+certificate (Windows) are in place; see the release notes for what each needs.
+Built directly by the CI runs linked from each release, from the exact tagged
+source — verify against `doc/BACKLOG-ci.md` if in doubt.
+
 ## What it does
 
 Tags are short sequence reads inferred straight from fragment ions — no database

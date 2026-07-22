@@ -43,6 +43,13 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    # write, not the default: needed only for the tag-triggered release-asset
+    # upload below. Scoped to this job rather than the workflow, since nothing
+    # else here needs it. GitHub already forces a read-only token for
+    # pull_request runs from forks regardless of this setting, so it grants
+    # nothing to an untrusted PR -- it only ever matters on an actual tag push.
+    permissions:
+      contents: write
     # A ceiling, not an estimate. Linux finishes in ~4 minutes; this exists so a
     # job that hangs dies rather than holding a concurrency group. It does NOT
     # cover a job stuck waiting for a runner -- GitHub only starts this clock once
@@ -219,3 +226,32 @@ jobs:
           name: FasTag-${{ matrix.name }}
           path: build/FasTag
           if-no-files-found: error
+
+      # Filenames deliberately carry no version: the README links
+      # /releases/latest/download/FasTag-<platform>.tar.gz, a GitHub URL form
+      # that always resolves to whatever the newest release's file of that
+      # name is. Each new tag's build overwrites the same name inside its OWN
+      # release, so nothing else needs to change when this table gets a new
+      # row.
+      #
+      # `gh release create ... || true`: this job runs once per matrix entry,
+      # so whichever platform's build finishes first creates the release (a
+      # placeholder, if the real notes have not been written yet -- edited in
+      # afterward without touching assets); every later entry's create call
+      # fails harmlessly because it already exists, then --clobber lets each
+      # attach its own binary regardless of arrival order.
+      - name: Attach binary to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash -el {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "Automated binary upload; release notes pending." \
+            2>/dev/null || true
+          mkdir -p dist
+          cp build/FasTag dist/FasTag
+          chmod +x dist/FasTag
+          tar -C dist -czf "FasTag-${{ matrix.name }}.tar.gz" FasTag
+          gh release upload "${{ github.ref_name }}" "FasTag-${{ matrix.name }}.tar.gz" --clobber
