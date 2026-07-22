@@ -322,6 +322,36 @@ jobs:
           TARGETS_DIR=$(dirname "$TARGETS_FILE")
           cp -v "$TARGETS_DIR"/OpenMSTargets*.cmake "$OPENMS_DIR/"
 
+      # OpenMSTargets.cmake references at least one imported library
+      # (OpenSwathAlgo.lib, on the first real run to reach this point) by a
+      # hardcoded absolute path outside openms-install entirely
+      # (D:/a/FasTag/bin/OpenSwathAlgo.lib) rather than the ${_IMPORT_PREFIX}
+      # relocatable form every other target uses -- a build-tree path that
+      # leaked into what should be an install-relocatable export, inside
+      # OpenMS's own export(TARGETS) rules and not something to chase upstream
+      # mid-task. Self-healing rather than hardcoding OpenSwathAlgo by name,
+      # in case another target has the identical problem: find every absolute
+      # .lib/.dll path the targets files reference that does not exist, locate
+      # a real file with the same name anywhere in the install tree, and copy
+      # it into place at the exact path CMake expects.
+      - name: Patch hardcoded absolute paths in OpenMSTargets.cmake
+        shell: bash
+        run: |
+          grep -ohE '"[A-Za-z]:/[^"]+\.(lib|dll)"' "$OPENMS_DIR"/OpenMSTargets*.cmake \
+            | tr -d '"' | sort -u | while read -r p; do
+            if [ ! -f "$p" ]; then
+              base=$(basename "$p")
+              real=$(find "$WS/openms-install" -name "$base" 2>/dev/null | head -1)
+              if [ -n "$real" ]; then
+                mkdir -p "$(dirname "$p")"
+                cp -v "$real" "$p"
+              else
+                echo "::error::$base is referenced at $p but no real copy exists anywhere in openms-install."
+                exit 1
+              fi
+            fi
+          done
+
       # OpenMSConfig.cmake.in does
       #   list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/Modules/")
       # before find_dependency(LIBSVM 2.91), so this should be automatic -- and
