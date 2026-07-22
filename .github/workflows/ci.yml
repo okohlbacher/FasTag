@@ -88,16 +88,19 @@ jobs:
           # macos-arm64 is not speculative: it PASSED in run 29857387912, in the
           # same matrix whose macos-x64 job wedged the queue. bioconda ships
           # osx-arm64 OpenMS 3.5.0, and QT_HOST_PATH below is what it needed.
-          # dylibbundler is the release-packaging step's tool -- the macOS
-          # equivalent of patchelf above.
-          - { name: macos-arm64, runner: macos-14, extra: "llvm-openmp dylibbundler" }
+          #
+          # dylibbundler (the macOS equivalent of patchelf above) is NOT here:
+          # `dylibbundler =* * does not exist` -- it is a Homebrew package, not
+          # a conda-forge one. Installed via `brew install` in its own step
+          # instead, further down.
+          - { name: macos-arm64, runner: macos-14, extra: "llvm-openmp" }
           # Intel macOS. `macos-13` is retired -- established, not suspected, and
           # the cause of the outage described above. macos-15-intel is GitHub's
           # replacement label; it schedules and passes. If it is ever retired in
           # turn, DROP the target rather than leave it amber: an untested platform
           # that looks merely "queued" is the more dangerous of the two states,
           # which is the whole lesson of this file.
-          - { name: macos-x64,   runner: macos-15-intel, extra: "llvm-openmp dylibbundler" }
+          - { name: macos-x64,   runner: macos-15-intel, extra: "llvm-openmp" }
 
     steps:
       - uses: actions/checkout@v4
@@ -328,6 +331,10 @@ jobs:
             > dist/FasTag/FasTag
           chmod +x dist/FasTag/FasTag dist/FasTag/FasTag.bin
           du -sh dist/FasTag
+
+      - name: Install dylibbundler (macOS)
+        if: runner.os == 'macOS'
+        run: brew install dylibbundler
 
       - name: Bundle runtime dependencies for portability (macOS)
         if: runner.os == 'macOS'
