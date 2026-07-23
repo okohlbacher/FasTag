@@ -7,9 +7,8 @@ the spectra whose tags occur in sequences you supply. A reimplementation of the
 *J. Proteome Res.* 2008, 7:3838 — is for that original DirecTag paper; FasTag
 has no separate publication of its own.
 
-**632,677 spectra from a 5.3 GB mzML in 9 seconds**, 1.2 GB peak memory — 31x
-faster than the reference implementation on the same hardware, returning 5-8%
-more tags.
+Scales across threads with memory independent of file size, and returns 5-8%
+more tags than the reference implementation.
 
 ## What it does
 
@@ -50,11 +49,11 @@ by Fisher's method into a single chi-squared-derived E-value:
   precursor mass).
 
 DirecTag computes the intensity term by enumerating every `C(n, k)` subset of
-peak ranks — seconds at tag length 5, tens of minutes at length 7. FasTag
-computes the same quantity as a restricted-partition count via dynamic
-programming, `O(k·n·s_max)`: every table for lengths 3-16 builds in 0.15 s,
-verified identical to exhaustive enumeration. This is most of why FasTag is
-faster, and what makes tag lengths above four practical at all.
+peak ranks — combinatorial in tag length, and impractical past length 4 or 5.
+FasTag computes the same quantity as a restricted-partition count via dynamic
+programming, `O(k·n·s_max)` — polynomial instead of combinatorial, verified
+identical to exhaustive enumeration. This is most of why FasTag is faster, and
+what makes tag lengths above four practical at all.
 
 **Extension** (`-extension`). A seed is a *minimum* length: each scored seed can
 be walked further along the graph at either end and rescored at its realised
@@ -149,9 +148,9 @@ configure reports which you have. Output is byte-identical to reading the same
 data as mzML. Reading only: `-out_spectra` needs mzML input.
 
 **Not memory-bounded, upstream** — `MzPeakFile::transform()` currently
-materialises the whole run rather than streaming it (~11x file size resident,
-against O(threads) for mzML). Prefer mzML for large runs until the upstream
-reader streams; see [doc/BACKLOG-mzpeak.md](doc/BACKLOG-mzpeak.md).
+materialises the whole run rather than streaming it, unlike the O(threads)
+mzML path. Prefer mzML for large runs until the upstream reader streams; see
+[doc/BACKLOG-mzpeak.md](doc/BACKLOG-mzpeak.md).
 
 ## Command-line reference
 
@@ -210,31 +209,14 @@ provenance and what each dataset is useful for comparing.
 
 Scaling is near-linear to 16 cores and useful well beyond; output is identical
 at every thread count, and memory is O(threads) rather than O(file) on the
-default mzML path (`-out_spectra` is the one exception — see above).
+default mzML path (`-out_spectra` is the one exception — see above). Exact
+wall-clock time and peak memory depend heavily on the machine, so they aren't
+quoted here — measure on your own hardware and data.
 
-**Laptop, 16 cores**, `tag_length 6`, 20 ppm:
-
-| dataset | spectra | file | 1 thread | 16 threads | speedup |
-|---|---|---|---|---|---|
-| Orbitrap Astral DDA | 102,236 | 1.7 GB | 32.7 s | **3.2 s** | 10.2x |
-| HeLa ddaPASEF | 357,802 | 12.2 GB | 128.7 s | **12.9 s** | 10.0x |
-
-**Server, 128 cores** — 632,677 spectra, 5.3 GB:
-
-| threads | 1 | 16 | 64 | 128 |
-|---|---|---|---|---|
-| wall | 271 s | 20 s | **9 s** | 7 s |
-
-Against the reference implementation, same file, same hardware, run
-sequentially:
-
-| | FasTag | DirecTag |
-|---|---|---|
-| 64 threads | **9 s** | 281 s |
-| scaling, 1 to 128 threads | **32x** | 2.1x |
-
-DirecTag stops scaling because its ranksum table build is serial and repeated
-every run; FasTag's equivalent is a one-off 0.15 s.
+Against the reference implementation, run sequentially on the same file and
+hardware, FasTag keeps scaling well past where DirecTag flattens out: DirecTag
+rebuilds its ranksum table serially on every run, while FasTag's equivalent is
+a one-off cost paid once regardless of thread count.
 
 ## Validation
 
