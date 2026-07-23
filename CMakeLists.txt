@@ -130,7 +130,7 @@ else()
                   "not apply.")
 endif()
 
-add_library(fastag_core STATIC src/FasTagger.cpp src/FastaFilter.cpp src/TagRecon.cpp src/TaxIndex.cpp)
+add_library(fastag_core STATIC src/FasTagger.cpp src/FastaFilter.cpp src/TagRecon.cpp src/TaxIndex.cpp src/TaxStats.cpp)
 target_include_directories(fastag_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
@@ -155,7 +155,7 @@ endif()
 option(FASTAG_BUILD_TESTS "Build tests" ON)
 if(FASTAG_BUILD_TESTS)
   enable_testing()
-  foreach(t ranksum_test fastag_test fasta_filter_test tagrecon_test taxindex_test)
+  foreach(t ranksum_test fastag_test fasta_filter_test tagrecon_test taxindex_test taxstats_test)
     add_executable(${t} test/${t}.cpp)
     target_link_libraries(${t} PRIVATE fastag_core)
     add_test(NAME ${t} COMMAND ${t})
