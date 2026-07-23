@@ -141,12 +141,25 @@ jobs:
           set -euo pipefail
           git clone -q https://github.com/okohlbacher/OpenMS-mzPeakRW.git mzpeak-rw
           git -C mzpeak-rw checkout -q "$MZPEAK_REF"
+          # src/openms ONLY -- the library, not the TOPP tools or tests the
+          # overlay also carries. FasTag links libOpenMS and nothing else, and
+          # one of those tools does not compile on MSVC:
+          #
+          #   src/topp/DIAPseudoSpectra.cpp(1447):
+          #     error C3861: 'omp_set_max_active_levels': identifier not found
+          #
+          # omp_set_max_active_levels is OpenMP 3.0; MSVC's /openmp implements
+          # 2.0 only. This job builds every target before installing, so unlike
+          # ci.yml it cannot simply not-build the tool -- not overlaying it is
+          # what keeps it out. src/topp/executables.cmake stays as the base has
+          # it, so the tool is never added to the build in the first place.
+          #
           # Fail loudly on an unexpected layout rather than silently building a
           # stock OpenMS and shipping a Windows binary with no mzPeak while the
           # other four platforms have it.
           test -f mzpeak-rw/src/openms/source/FORMAT/MzPeakFile.cpp
           test -f mzpeak-rw/src/openms/include/OpenMS/FORMAT/MzPeakFile.h
-          ( cd mzpeak-rw && git ls-files -z 'src/*' ) \
+          ( cd mzpeak-rw && git ls-files -z 'src/openms/*' ) \
             | while IFS= read -r -d '' f; do
                 mkdir -p "openms-src/$(dirname "$f")"
                 cp "mzpeak-rw/$f" "openms-src/$f"
