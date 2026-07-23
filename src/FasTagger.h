@@ -15,11 +15,31 @@
 
 #include <FasTag/ranksum.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace FasTag
 {
+  struct Alphabet;  ///< residue/pair tables built from Param.mods; defined in the .cpp
+
+  /// One residue-specific modification, resolved to a mass by the TOPP tool
+  /// (from OpenMS ModificationsDB) so this library needs no modification
+  /// database of its own.
+  ///
+  /// Terminal modifications are NOT represented here: a fixed N- or C-terminal
+  /// mod shifts the whole precursor mass and is therefore absorbed into the
+  /// reported flanking masses automatically, with no effect on which internal
+  /// edges the graph has. Only residue-specific mods change the alphabet.
+  struct ModSpec
+  {
+    char        residue;   ///< the residue this applies to (e.g. 'C', 'S', 'K')
+    double      delta;     ///< monoisotopic mass shift
+    std::string name;      ///< display name, e.g. "Phospho", "Carbamidomethyl"
+    bool        variable;  ///< true: adds a modified alternative to the residue;
+                           ///< false: shifts the residue's mass unconditionally
+  };
+
   /// Tagging parameters. Every field is set by the TOPP tool; there are no
   /// hidden knobs and no compatibility modes.
   struct Param
@@ -62,6 +82,11 @@ namespace FasTag
     double gap_penalty    = 100.0;
     unsigned seed         = 20080717u;  ///< the m/z-fidelity null is Monte Carlo
     int    mzfidelity_samples = 10000;
+    /// Residue-specific modifications. Fixed mods shift a residue's mass;
+    /// variable mods add a modified alternative that the graph may also use.
+    /// Empty means the unmodified 19-residue alphabet. Resolved by the TOPP
+    /// tool; the default it passes is a single fixed Carbamidomethyl (C).
+    std::vector<ModSpec> mods;
   };
 
   /// One tag. Flanking masses assume the low-m/z peak is a y ion, as DirecTag
@@ -69,7 +94,10 @@ namespace FasTag
   /// peptide and its flanks carry a one-water offset.
   struct Tag
   {
-    std::string seq;            ///< N->C
+    std::string seq;            ///< N->C. Modified residues are written inline as
+                                ///< X[ModName] (e.g. "GS[Phospho]TK"), so seq is
+                                ///< not one char per residue -- use n_res.
+    size_t n_res = 0;           ///< residue count (bracket annotations excluded)
     double nterm_mass = 0;      ///< residue mass N-terminal to the tag
     double cterm_mass = 0;      ///< residue mass C-terminal to the tag
     int    charge = 1;          ///< fragment charge the tag was read at
@@ -99,11 +127,15 @@ namespace FasTag
     /// P(SSE <= observed) for the m/z-fidelity statistic.
     double mzFidelityP(int tag_peaks, double sse) const;
 
+    /// The residue/pair alphabet for this run, built once from Param.mods.
+    const Alphabet& alphabet() const { return *alpha_; }
+
   private:
     int k_min_, k_max_;
     size_t n_max_;
     std::vector<std::vector<std::vector<float>>> ranksum_;  ///< [k][npeaks] -> CDF
     std::vector<std::vector<double>> mz_null_;              ///< [k] -> sorted SSE samples
+    std::shared_ptr<const Alphabet> alpha_;                 ///< residue + pair tables
   };
 
   /// Infer sequence tags from one centroided MS/MS spectrum.
@@ -114,4 +146,21 @@ namespace FasTag
   /// @return tags ordered by E-value, best first
   std::vector<Tag> tagSpectrum(const OpenMS::MSSpectrum& spec, double precursor_mz,
                                int charge, const Param& p, const Tables& tables);
+
+  /// Strip inline modification annotations, leaving one base residue per
+  /// position: "GS[Phospho]TK[TMT6plex]" -> "GSTK". Used for FASTA matching,
+  /// which is against unmodified protein sequences.
+  inline std::string baseSequence(const std::string& annotated)
+  {
+    std::string out;
+    out.reserve(annotated.size());
+    int depth = 0;
+    for (char c : annotated)
+    {
+      if (c == '[') { ++depth; continue; }
+      if (c == ']') { if (depth > 0) --depth; continue; }
+      if (depth == 0) out.push_back(c);
+    }
+    return out;
+  }
 }

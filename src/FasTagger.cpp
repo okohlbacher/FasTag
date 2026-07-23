@@ -65,90 +65,89 @@ namespace FasTag
   // tag_length with gaps gives a high inferred fraction, and that is the
   // caller's trade rather than something to hard-code here.
 
+  /// The residue and pair tables the graph walks, built once per run from the
+  /// active modifications. Held by Tables and passed read-only into the tagger.
+  ///
+  /// With no modifications this is exactly the old alphabet -- the canonical
+  /// "Natural19WithoutI" set (I and L are isobaric, so a spectrum cannot tell
+  /// them apart and enumerating both would only double the output), mass-sorted
+  /// so the DFS emits deterministically. Fixed mods shift a residue's mass;
+  /// variable mods append a modified alternative.
+  struct Alphabet
+  {
+    struct Res { char base; double mass; std::string mod; };  ///< mod "" = unmodified
+    struct Pair { double mass; uint8_t a, b; };
+
+    std::vector<Res>  res;    ///< base residues first (mass-sorted), variables after
+    std::vector<Pair> pairs;  ///< two-residue sums over the BASE residues only
+    uint8_t           n_base = 0;
+
+    explicit Alphabet(const std::vector<ModSpec>& mods)
+    {
+      // Base residues, with fixed-mod mass shifts folded in.
+      for (const Residue* r : ResidueDB::getInstance()->getResidues("Natural19WithoutI"))
+      {
+        char c = r->getOneLetterCode()[0];
+        double m = r->getMonoWeight(Residue::Internal);
+        for (const ModSpec& mod : mods)
+          if (!mod.variable && mod.residue == c) m += mod.delta;
+        res.push_back({c, m, ""});
+      }
+      // Mass-sorted keeps the graph edges ordered (deterministic emission) and,
+      // with no mods, reproduces the previous table bit for bit.
+      std::sort(res.begin(), res.end(), [](const Res& a, const Res& b) { return a.mass < b.mass; });
+      n_base = static_cast<uint8_t>(res.size());
+
+      // Pairs over the base residues only. Gaps already assert a lot; letting a
+      // variable-modified residue also be an unobserved gap member would multiply
+      // that uncertainty for little gain, so modified residues take ordinary
+      // edges only. 190 pairs over 19 residues; three-residue sums are omitted
+      // for the same reason DirecTag omits them (they match a random difference
+      // 40-60% of the time, asserting almost nothing).
+      for (uint8_t i = 0; i < n_base; ++i)
+        for (uint8_t j = i; j < n_base; ++j)
+          pairs.push_back({res[i].mass + res[j].mass, i, j});
+      std::sort(pairs.begin(), pairs.end(), [](const Pair& x, const Pair& y) { return x.mass < y.mass; });
+
+      // Variable mods: one appended entry per (mod, matching base residue),
+      // carrying base_mass + delta and the mod name for inline annotation.
+      // Appended after the base set so pair indices (which reference base
+      // residues) stay valid. Deterministic order: input mod order, then residue.
+      for (const ModSpec& mod : mods)
+      {
+        if (!mod.variable) continue;
+        for (uint8_t i = 0; i < n_base; ++i)
+          if (res[i].base == mod.residue)
+            res.push_back({mod.residue, res[i].mass + mod.delta, mod.name});
+      }
+    }
+  };
+
   namespace
   {
-    /// Residue masses from OpenMS, not a hardcoded table.
-    ///
-    /// "Natural19WithoutI" is exactly the canonical set the graph needs: I and L
-    /// are isobaric, so a spectrum cannot distinguish them and enumerating both
-    /// would only double the output. OpenMS::Tagger uses the same set.
-    ///
-    /// Measured against the table this replaced: worst difference 0.005 mDa
-    /// (cysteine), i.e. 4000x smaller than the 20 mDa tolerance at m/z 1000.
-    struct ResidueTable
-    {
-      std::vector<char>   code;
-      std::vector<double> mass;
-
-      ResidueTable()
-      {
-        for (const Residue* r : ResidueDB::getInstance()->getResidues("Natural19WithoutI"))
-        {
-          code.push_back(r->getOneLetterCode()[0]);
-          mass.push_back(r->getMonoWeight(Residue::Internal));
-        }
-        // Ascending mass keeps the graph edges ordered, which makes the DFS emit
-        // tags deterministically without a later sort.
-        std::vector<size_t> idx(mass.size());
-        std::iota(idx.begin(), idx.end(), 0);
-        std::sort(idx.begin(), idx.end(), [&](size_t a, size_t b) { return mass[a] < mass[b]; });
-        std::vector<char> c2; std::vector<double> m2;
-        for (size_t i : idx) { c2.push_back(code[i]); m2.push_back(mass[i]); }
-        code.swap(c2); mass.swap(m2);
-      }
-    };
-
-    const ResidueTable& residues()
-    {
-      static const ResidueTable t;
-      return t;
-    }
-
-    /// Sums of two residues, for bridging exactly one missing peak.
-    ///
-    /// 190 unordered pairs over the 19 residues. One-residue gaps are not here
-    /// because an ordinary edge already is one. Three-residue sums are
-    /// deliberately not offered either: 1330 entries packed into the same mass
-    /// range match a random difference 40-60% of the time above 300 Da, so such
-    /// an edge asserts almost nothing while doubling the branching again.
-    struct PairTable
-    {
-      struct Entry { double mass; uint8_t a, b; };
-      std::vector<Entry> e;
-
-      PairTable()
-      {
-        const auto& R = residues();
-        for (uint8_t i = 0; i < R.mass.size(); ++i)
-          for (uint8_t j = i; j < R.mass.size(); ++j)
-            e.push_back({R.mass[i] + R.mass[j], i, j});
-        std::sort(e.begin(), e.end(),
-                  [](const Entry& x, const Entry& y) { return x.mass < y.mass; });
-      }
-    };
-
-    const PairTable& pairs()
-    {
-      static const PairTable t;
-      return t;
-    }
-
     /// One traversal step: an ordinary edge carries one residue, a gap edge
     /// carries a two-residue sum whose split is not observed.
     struct Step
     {
-      uint16_t pair = 0;   ///< index into pairs().e when gap
-      uint8_t  res = 0;    ///< index into residues() otherwise
+      uint16_t pair = 0;   ///< index into Alphabet::pairs when gap
+      uint8_t  res = 0;    ///< index into Alphabet::res otherwise
       bool     gap = false;
       bool     swap = false;  ///< gap only: which arrangement of the pair to spell
     };
 
-    inline double stepMass(const Step& st)
+    inline double stepMass(const Alphabet& A, const Step& st)
     {
-      return st.gap ? pairs().e[st.pair].mass : residues().mass[st.res];
+      return st.gap ? A.pairs[st.pair].mass : A.res[st.res].mass;
     }
 
     inline int stepResidues(const Step& st) { return st.gap ? 2 : 1; }
+
+    /// Append one residue's spelling: base letter, plus [ModName] if modified.
+    inline void spellRes(std::string& out, const Alphabet::Res& r)
+    {
+      out.push_back(r.base);
+      if (!r.mod.empty()) { out.push_back('['); out.append(r.mod); out.push_back(']'); }
+    }
 
     /// Spell a path N->C.
     ///
@@ -156,24 +155,32 @@ namespace FasTag
     /// path is walked backwards. That reversal is real and matters for ordinary
     /// steps. A gap's two residues are never observed separately, so they have no
     /// order to preserve -- emit() spells both arrangements instead of guessing.
-    std::string spell(const std::vector<Step>& path)
+    /// Gap members are base residues (pairs are built over base residues only),
+    /// so they never carry a bracket.
+    std::string spell(const Alphabet& A, const std::vector<Step>& path)
     {
-      const auto& R = residues();
       std::string out;
-      out.reserve(path.size() + 1);
       for (int i = static_cast<int>(path.size()) - 1; i >= 0; --i)
       {
         const Step& st = path[static_cast<size_t>(i)];
-        if (!st.gap) { out.push_back(R.code[st.res]); continue; }
-        const auto& pe = pairs().e[st.pair];
+        if (!st.gap) { spellRes(out, A.res[st.res]); continue; }
+        const auto& pe = A.pairs[st.pair];
         // Neither residue in a gap is observed, so there is no traversal order
         // to preserve: swap simply selects one of the two arrangements, and
         // emit() produces both. Ordinary steps above are the ones whose order is
         // real and must be reversed.
-        out.push_back(R.code[st.swap ? pe.a : pe.b]);
-        out.push_back(R.code[st.swap ? pe.b : pe.a]);
+        out.push_back(A.res[st.swap ? pe.a : pe.b].base);
+        out.push_back(A.res[st.swap ? pe.b : pe.a].base);
       }
       return out;
+    }
+
+    /// Residue count of a path (bracket annotations do not count).
+    inline size_t pathResidues(const std::vector<Step>& path)
+    {
+      size_t n = 0;
+      for (const Step& st : path) n += stepResidues(st);
+      return n;
     }
 
     const double WATER = EmpiricalFormula("H2O").getMonoWeight();
@@ -212,7 +219,8 @@ namespace FasTag
   Tables::Tables(const Param& p)
     : k_min_(std::max(2, p.tag_length + 1 - std::max(0, p.max_gaps))),
       k_max_(std::max(2, p.tag_length + 1 + 2 * std::max(0, p.max_extension))),
-      n_max_(p.max_peak_count > 0 ? p.max_peak_count : PEAK_CEILING)
+      n_max_(p.max_peak_count > 0 ? p.max_peak_count : PEAK_CEILING),
+      alpha_(std::make_shared<const Alphabet>(p.mods))
   {
     ranksum_.resize(static_cast<size_t>(k_max_ - k_min_ + 1));
     for (int k = k_min_; k <= k_max_; ++k)
@@ -506,21 +514,22 @@ namespace FasTag
       std::vector<uint32_t> roff, rsrc; ///< reverse edges, so C-terminal
       std::vector<uint8_t>  rres;       ///< extension is O(degree) too
       std::vector<uint32_t> goff, gdst; ///< gap edges, empty unless max_gaps > 0
-      std::vector<uint16_t> gpair;      ///< matched entry in pairs().e
+      std::vector<uint16_t> gpair;      ///< matched entry in Alphabet::pairs
     };
 
-    Graph buildGraph(const Prepared& s, const Param& p, int charge)
+    Graph buildGraph(const Prepared& s, const Param& p, const Alphabet& A, int charge)
     {
       const size_t n = s.spec.size();
-      const auto& R = residues();
       Graph g;
       g.off.assign(n + 1, 0);
       g.roff.assign(n + 1, 0);
       std::vector<std::vector<std::pair<uint32_t, uint8_t>>> adj(n), radj(n);
+      // Every residue -- base and variable-modified -- is a candidate single
+      // edge, so a variable mod simply adds more edges to try.
       for (size_t i = 0; i < n; ++i)
-        for (uint8_t r = 0; r < R.mass.size(); ++r)
+        for (uint8_t r = 0; r < A.res.size(); ++r)
         {
-          const double target = s.spec[i].getMZ() + R.mass[r] / charge;
+          const double target = s.spec[i].getMZ() + A.res[r].mass / charge;
           const int j = s.spec.findNearest(target, tolAt(p, target));
           if (j > static_cast<int>(i))
           {
@@ -546,7 +555,7 @@ namespace FasTag
       // difference exceeds the heaviest pair.
       if (p.max_gaps > 0 && n > 1)
       {
-        const auto& P = pairs().e;
+        const auto& P = A.pairs;
         const double p_lo = P.front().mass, p_hi = P.back().mass;
         std::vector<std::vector<std::pair<uint32_t, uint16_t>>> gadj(n);
         for (size_t i = 0; i < n; ++i)
@@ -558,7 +567,7 @@ namespace FasTag
             if (d - tol > p_hi) break;
             int best = -1; double best_err = tol;
             for (auto it = std::lower_bound(P.begin(), P.end(), d - tol,
-                     [](const PairTable::Entry& x, double v) { return x.mass < v; });
+                     [](const Alphabet::Pair& x, double v) { return x.mass < v; });
                  it != P.end() && it->mass <= d + tol; ++it)
             {
               const double err = std::fabs(it->mass - d);
@@ -582,7 +591,7 @@ namespace FasTag
                   const std::vector<uint32_t>& peaks, const std::vector<Step>& path,
                   int charge)
     {
-      const auto& R = residues();
+      const Alphabet& A = tab.alphabet();
       const int k = static_cast<int>(peaks.size());
       Tag t;
       t.charge = charge;
@@ -600,7 +609,7 @@ namespace FasTag
       est[0] = s.spec[peaks[0]].getMZ();
       for (int i = 0; i < k - 1; ++i)
       {
-        cum += stepMass(path[static_cast<size_t>(i)]) / charge;
+        cum += stepMass(A, path[static_cast<size_t>(i)]) / charge;
         est[static_cast<size_t>(i) + 1] = s.spec[peaks[static_cast<size_t>(i) + 1]].getMZ() - cum;
       }
       const double avg = std::accumulate(est.begin(), est.end(), 0.0) / k;
@@ -659,7 +668,8 @@ namespace FasTag
       // its residues are traversed a-then-b, which reads b-then-a in the stored
       // direction. Getting this wrong transposes exactly two residues, which no
       // mass check would catch because the pair sum is unchanged.
-      t.seq = spell(path);
+      t.seq = spell(A, path);
+      t.n_res = pathResidues(path);
       for (const Step& st : path) if (st.gap) { t.gapped = true; break; }
       t.low_mz = s.spec[peaks.front()].getMZ();
       return t;
@@ -692,11 +702,11 @@ namespace FasTag
     /// damage grows with extension length as more of the tag becomes inference.
     ///
     /// Do not reimplement without a measurement that contradicts this one.
-    int extendPath(const Prepared& s, const Param& p, const Graph& g,
+    int extendPath(const Prepared& s, const Param& p, const Alphabet& A, const Graph& g,
                    std::vector<uint32_t>& peaks, std::vector<Step>& path,
                    int charge, bool forward)
     {
-      const auto& R = residues();
+      const auto& R = A.res;
       int added = 0;
       std::vector<bool> used(s.spec.size(), false);
       for (uint32_t i : peaks) used[i] = true;
@@ -713,8 +723,8 @@ namespace FasTag
           const uint8_t rr = forward ? g.res[e] : g.rres[e];
           if (used[cand]) continue;
           const double err = forward
-              ? std::fabs(s.spec[cand].getMZ() - (s.spec[cur].getMZ() + R.mass[rr] / charge))
-              : std::fabs(s.spec[cur].getMZ() - (s.spec[cand].getMZ() + R.mass[rr] / charge));
+              ? std::fabs(s.spec[cand].getMZ() - (s.spec[cur].getMZ() + R[rr].mass / charge))
+              : std::fabs(s.spec[cur].getMZ() - (s.spec[cand].getMZ() + R[rr].mass / charge));
           const bool better = best < 0 || err < best_err - 1e-12 ||
               (std::fabs(err - best_err) <= 1e-12 &&
                (s.rank[cand] < s.rank[static_cast<size_t>(best)] ||
@@ -774,11 +784,11 @@ namespace FasTag
       // their own sequence. The alternative masses are exact numbers, so
       // recomputing asserts no precision the data lacks; it is arithmetic
       // consistency, and it costs one rescore of a path a few peaks long.
-      const auto& P = pairs().e;
+      const auto& P = tab.alphabet().pairs;
       std::vector<Step> alt(path);
       int emitted = 0;
       for (auto it = std::lower_bound(P.begin(), P.end(), d - tol,
-               [](const PairTable::Entry& x, double v) { return x.mass < v; });
+               [](const Alphabet::Pair& x, double v) { return x.mass < v; });
            it != P.end() && it->mass <= d + tol; ++it)
       {
         const int orders = (it->a == it->b) ? 1 : 2;
@@ -821,10 +831,11 @@ namespace FasTag
 
     std::vector<Tag> scored;
     size_t n_seeds = 0;
+    const Alphabet& A = tables.alphabet();
 
     for (int z = 1; z <= s.n_frag_charges; ++z)
     {
-      const Graph g = buildGraph(s, p, z);
+      const Graph g = buildGraph(s, p, A, z);
       std::vector<uint32_t> peaks;
       std::vector<Step> path;
       // edge is a relative index over this node's ordinary edges followed by its
@@ -857,8 +868,8 @@ namespace FasTag
             std::vector<Step> rs = path;
             int grew = 0;
             if (p.max_extension > 0)
-              grew = extendPath(s, p, g, pk, rs, z, true)
-                   + extendPath(s, p, g, pk, rs, z, false);
+              grew = extendPath(s, p, A, g, pk, rs, z, true)
+                   + extendPath(s, p, A, g, pk, rs, z, false);
             // Rescore at the realised length: a seed's statistic does not
             // describe an extended tag, and the per-length nulls are already built.
             Tag t = scorePath(s, p, tables, pk, rs, z);

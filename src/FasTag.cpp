@@ -7,6 +7,8 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
+#include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <OpenMS/CHEMISTRY/ResidueModification.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
@@ -222,6 +224,63 @@ protected:
                           "Match a tag as written, or also reversed. Tags are stored N->C under a "
                           "y-ion assumption, so b-derived tags read reversed", false);
     setValidStrings_("orientation", ListUtils::create<String>("both,forward"));
+
+    // Modifications, resolved through OpenMS ModificationsDB so any UniMod name
+    // works, not a fixed list. Fixed mods shift a residue's mass and are not
+    // annotated (the shift is implicit, as carbamidomethyl-C conventionally is);
+    // variable mods add a modified alternative that is written inline in the tag
+    // as X[Name] (e.g. S[Phospho]). Residue-specific mods only -- a terminal mod
+    // shifts the whole precursor and so is already carried in the flanking
+    // masses, with nothing per-residue to annotate.
+    registerStringList_("fixed_modifications", "<mods>",
+                        ListUtils::create<String>("Carbamidomethyl (C)"),
+                        "Fixed modifications by OpenMS/UniMod name, e.g. "
+                        "'Carbamidomethyl (C)' 'TMT6plex (K)'. Shift residue masses; "
+                        "not annotated in the tag", false);
+    registerStringList_("variable_modifications", "<mods>", ListUtils::create<String>(""),
+                        "Variable modifications by OpenMS/UniMod name, e.g. "
+                        "'Phospho (S)' 'Phospho (T)' 'Phospho (Y)' 'Formyl (K)'. "
+                        "Add a modified alternative, written inline as X[Name]", false);
+  }
+
+  /// Resolve OpenMS/UniMod modification names to FasTag::ModSpec via
+  /// ModificationsDB. Terminal mods are skipped with a note -- they are absorbed
+  /// into the reported flanking masses, not the internal residue alphabet.
+  void resolveMods_(const StringList& names, bool variable, std::vector<FasTag::ModSpec>& out)
+  {
+    auto* db = ModificationsDB::getInstance();
+    for (const String& nm : names)
+    {
+      if (nm.empty()) continue;
+      const ResidueModification* mod = nullptr;
+      try { mod = db->getModification(nm); }
+      catch (Exception::BaseException&)
+      {
+        OPENMS_LOG_ERROR << "Unknown modification '" << nm << "'; ignoring." << std::endl;
+        continue;
+      }
+      if (!mod) continue;
+      if (mod->getTermSpecificity() != ResidueModification::ANYWHERE)
+      {
+        OPENMS_LOG_INFO << "Modification '" << nm << "' is terminal; it is absorbed "
+                           "into the reported flanking masses and not annotated "
+                           "per-residue." << std::endl;
+        continue;
+      }
+      const char origin = mod->getOrigin();
+      if (origin < 'A' || origin > 'Z')
+      {
+        OPENMS_LOG_WARN << "Modification '" << nm << "' has no single-residue origin; "
+                           "ignoring." << std::endl;
+        continue;
+      }
+      FasTag::ModSpec ms;
+      ms.residue = (origin == 'I') ? 'L' : origin;  // I is folded to L in the alphabet
+      ms.delta = mod->getDiffMonoMass();
+      ms.name = mod->getId();
+      ms.variable = variable;
+      out.push_back(ms);
+    }
   }
 
   ExitCodes main_(int, const char**) override
@@ -243,6 +302,16 @@ protected:
     p.max_tag_count = getIntOption_("max_tags");
     p.max_evalue = getDoubleOption_("max_evalue");
     p.gap_penalty = getDoubleOption_("gap_penalty");
+    resolveMods_(getStringList_("fixed_modifications"), false, p.mods);
+    resolveMods_(getStringList_("variable_modifications"), true, p.mods);
+    if (!p.mods.empty())
+    {
+      String summary;
+      for (const auto& m : p.mods)
+        summary += (summary.empty() ? "" : ", ") + m.name + " (" + String(m.residue) + ", "
+                 + (m.variable ? "variable" : "fixed") + ")";
+      OPENMS_LOG_INFO << "Modifications: " << summary << std::endl;
+    }
 
     // Unconditional: the realised length bounds the null tables whether or not a
     // FASTA filter is in use.
@@ -493,10 +562,10 @@ protected:
         const char* hit = "-";
         if (filtering)
         {
-          ++per_thread_len[tid][static_cast<int>(t.seq.size())].first;
-          const auto h = filt.match(t.seq);
+          ++per_thread_len[tid][static_cast<int>(t.n_res)].first;
+          const auto h = filt.match(FasTag::baseSequence(t.seq));
           if (h == FasTag::FastaFilter::Hit::None) continue;
-          ++per_thread_len[tid][static_cast<int>(t.seq.size())].second;
+          ++per_thread_len[tid][static_cast<int>(t.n_res)].second;
           // A reverse-only match identifies the ion series: the tag was read off
           // the b series, so its flanking masses carry a one-water offset.
           hit = (h == FasTag::FastaFilter::Hit::Forward) ? "fwd" : "rev";
@@ -512,7 +581,7 @@ protected:
         // where relative precision is what matters.
         const int m = std::snprintf(line, sizeof line,
                                     "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\t%g\t%s\n",
-                                    spec.getNativeID().c_str(), t.seq.c_str(), t.seq.size(),
+                                    spec.getNativeID().c_str(), t.seq.c_str(), t.n_res,
                                     t.charge, t.nterm_mass, t.cterm_mass,
                                     t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue, hit);
         // snprintf returns the length it WOULD have written, which a long native
@@ -529,7 +598,7 @@ protected:
           std::vector<char> big(static_cast<size_t>(m) + 1);
           const int m2 = std::snprintf(big.data(), big.size(),
                                        "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\t%g\t%s\n",
-                                       spec.getNativeID().c_str(), t.seq.c_str(), t.seq.size(),
+                                       spec.getNativeID().c_str(), t.seq.c_str(), t.n_res,
                                        t.charge, t.nterm_mass, t.cterm_mass,
                                        t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue, hit);
           if (m2 > 0) buf.append(big.data(), static_cast<size_t>(m2));
