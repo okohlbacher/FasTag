@@ -92,7 +92,12 @@ if(_openms_inc)
           AND EXISTS "${_d}/OpenMS/FORMAT/FileTypes.h")
       file(READ "${_d}/OpenMS/FORMAT/FileTypes.h" _ft)
       string(FIND "${_ft}" "MZPEAK" _has_enum)
-      if(NOT _has_enum EQUAL -1)
+      # store() as well as the enum, because -out_spectra now writes mzPeak too.
+      # Same principle as the enum check above: detect every API the code calls,
+      # not a proxy for them.
+      file(READ "${_d}/OpenMS/FORMAT/MzPeakFile.h" _mp)
+      string(FIND "${_mp}" "void store(" _has_store)
+      if(NOT _has_enum EQUAL -1 AND NOT _has_store EQUAL -1)
         set(_fastag_mzpeak ON)
       endif()
       break()

@@ -150,11 +150,15 @@ protected:
     registerInputFile_("fasta", "<file>", "", "Report only tags occurring in these sequences", false);
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
     registerOutputFile_("out_spectra", "<file>", "",
-                        "Write spectra carrying a reported tag to this mzML. Note "
-                        "this path holds one slot per input spectrum, so unlike "
-                        "the default it needs memory proportional to the FILE, "
-                        "not to the thread count", false);
+                        "Write spectra carrying a reported tag here (mzML, or "
+                        "mzpeak if this build has it). Note this path holds one "
+                        "slot per input spectrum, so unlike the default it needs "
+                        "memory proportional to the FILE, not to the thread count", false);
+#ifdef FASTAG_HAVE_MZPEAK
+    setValidFormats_("out_spectra", ListUtils::create<String>("mzML,mzpeak"));
+#else
     setValidFormats_("out_spectra", ListUtils::create<String>("mzML"));
+#endif
 
     registerIntOption_("tag_length", "<n>", 3, "Seed tag length in residues", false);
     setMinInt_("tag_length", 1);
@@ -320,18 +324,15 @@ protected:
     // one thing the compile-time gate was supposed to prevent.
 #ifdef FASTAG_HAVE_MZPEAK
     const bool mzpeak_in = FileHandler::getType(in) == FileTypes::MZPEAK;
+    // Which writer -out_spectra gets, decided from its own extension rather
+    // than the input's: every one of the four in/out combinations is allowed,
+    // so mzML->mzpeak and mzpeak->mzML both work as a side effect of tagging.
+    const bool mzpeak_out = !out_spectra.empty()
+                            && FileHandler::getType(out_spectra) == FileTypes::MZPEAK;
 #else
     const bool mzpeak_in = false;
+    const bool mzpeak_out = false;
 #endif
-    if (mzpeak_in && !out_spectra.empty())
-    {
-      // -out_spectra writes mzML, which needs run-level ExperimentalSettings.
-      // The consumer is handed them, but that combination is untested, so refuse
-      // rather than write a file that may be subtly wrong.
-      OPENMS_LOG_ERROR << "-out_spectra is not supported with mzPeak input yet."
-                       << std::endl;
-      return ILLEGAL_PARAMETERS;
-    }
 
     // A pointer, not a value: the fallback below must replace this with a
     // genuinely fresh reader, and OnDiscMSExperiment's operator= is private
@@ -595,6 +596,11 @@ protected:
       ChunkingConsumer consumer(flush_chunk, 1000u * 1000u);
       MzPeakFile().transform(in, &consumer);
       consumer.finish();   // the final partial chunk, otherwise silently dropped
+      // Run-level settings for -out_spectra come from the consumer here; the
+      // mzML paths take them from getMetaData()/the loaded map above, neither
+      // of which ran. Without this the written file has no run-level metadata
+      // at all.
+      if (!out_spectra.empty()) kept.getExperimentalSettings() = consumer.settings();
 #endif
     }
     else
@@ -678,7 +684,18 @@ protected:
         return UNEXPECTED_RESULT;
       }
       addDataProcessing_(kept, getProcessingInfo_(DataProcessing::FILTERING));
-      FileHandler().storeExperiment(out_spectra, kept, {FileTypes::MZML});
+      if (mzpeak_out)
+      {
+#ifdef FASTAG_HAVE_MZPEAK
+        // Not routed through FileHandler: its storeExperiment() has no mzPeak
+        // branch, so asking it for one silently writes something else.
+        MzPeakFile().store(out_spectra, kept);
+#endif
+      }
+      else
+      {
+        FileHandler().storeExperiment(out_spectra, kept, {FileTypes::MZML});
+      }
       OPENMS_LOG_INFO << "Wrote " << kept.size() << " spectra to " << out_spectra << std::endl;
     }
     return EXECUTION_OK;

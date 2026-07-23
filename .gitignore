@@ -4,3 +4,5 @@ build/
 *.mzML
 *.mgf
 *.tags
+build-mzpeak/
+build-diag/
