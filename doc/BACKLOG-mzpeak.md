@@ -49,6 +49,52 @@ Two decisions worth keeping:
 | mzpeak -> tags | 42,092 MS2 / 883,939 tags on a 155 MB Lumos file -- same spectrum count as its mzML |
 | mzpeak -> mzpeak -> tags | 883,939 tags, unchanged through the write and re-read |
 
+### Timing: mzPeak vs mzML, same data, 16 cores
+
+Same acquisition in both formats -- Thermo Lumos, 42,092 MS2 spectra, 589 MB
+as mzML and 155 MB as mzpeak. Apple M-series, 16 cores, 128 GB; page cache
+warmed for both files first; two reps per cell, spread under 2%.
+
+| threads | mzML wall | mzpeak wall | mzpeak speedup |
+|---|---|---|---|
+| 1 | 15.07 s | 6.06 s | 2.5x |
+| 2 | 9.23 s | 3.82 s | 2.4x |
+| 4 | 6.21 s | 2.63 s | 2.4x |
+| 8 | 4.54 s | 1.95 s | 2.3x |
+| 16 | **3.83 s** | **1.69 s** | **2.3x** |
+
+Peak RSS tells the other half of the story, and the two shapes are the point:
+
+| threads | mzML | mzpeak |
+|---|---|---|
+| 1 | 339 MB | 1686 MB |
+| 16 | 444 MB | 1686 MB |
+
+**mzPeak buys ~2.3x wall time with ~4x memory.** mzML grows slowly with thread
+count (O(threads), one streamed spectrum in flight per worker); mzPeak is
+completely flat because `transform()` materialises the whole run up front --
+the same non-streaming behaviour documented above, seen from the cost side.
+
+Why it is faster is not mysterious: the mzML path decodes XML, base64 and zlib
+per spectrum *inside* the parallel loop, while mzPeak has already paid a
+vectorised columnar Parquet decode into RAM and the loop does nothing but tag.
+Fitting Amdahl to the two curves puts the serial part at ~3.1 s for mzML
+against ~1.4 s for mzpeak, and the parallel part at ~12.0 s against ~4.7 s.
+
+**Two caveats before quoting any of this.**
+
+The OpenMS here does NOT have the fast-reader patch (`doc/OPENMS-FAST-READER.md`),
+so the mzML path pays a serial up-front metadata parse that a patched build
+skips -- roughly the ~1.7 s difference in the fitted serial terms. A patched
+OpenMS would narrow this gap, and nothing here measures by how much.
+
+Tag counts are not identical: 905,760 from mzML against 883,939 from mzpeak,
+97.6%. The mzpeak file is a conversion of the same raw data, and its float32
+m/z storage against mzML's float64 moves a small number of borderline tags
+across the tolerance. Not a correctness difference between the readers -- a
+FasTag-written mzpeak round-trips to exactly the source file's tag set, which
+is the controlled comparison.
+
 ### Two upstream bugs found while wiring this up
 
 Both silent, both fixed in [OpenMS-mzPeakRW PR #1](https://github.com/okohlbacher/OpenMS-mzPeakRW/pull/1),
