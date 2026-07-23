@@ -68,6 +68,13 @@ env:
   # mismatch is more likely to be visible as a build failure than as silent
   # wrongness -- but it is the first thing to suspect if this job breaks in a
   # way ci.yml does not.
+  #
+  # It broke exactly that way on the first attempt: this contrib builds Arrow
+  # 22, the new base requires >= 23, and contrib's arrow_static.lib won the
+  # search ahead of conda's. Fixed by pinning Arrow_DIR/Parquet_DIR at the
+  # conda env in the configure step below rather than by moving contrib --
+  # conda is where OpenMS's own Windows CI gets Arrow anyway, so this narrows
+  # the divergence rather than widening it.
   OPENMS_BASE_SHA: bd4b89555629d68b431b189a4c841efbcc4dfeea
   MZPEAK_REF: f9c8a72a74ed3418d67eac9d01a1c28f59365cc8
   # The contrib commit release/3.5.0 pins as a submodule, read directly out of
@@ -193,7 +200,7 @@ jobs:
       - name: Configure conda packages and paths
         shell: bash -el {0}
         run: |
-          conda install -c conda-forge libarrow libparquet libzip nlohmann_json -y
+          conda install -c conda-forge 'libarrow>=23' libparquet libarrow-dataset libarrow-acero libzip nlohmann_json -y
           CONDA_ENV_PREFIX=$(conda info --json | python -c "import json,sys;print(json.load(sys.stdin)['active_prefix'])" | sed 's|\\|/|g')
           echo "CONDA_LIB_PREFIX=$CONDA_ENV_PREFIX/Library" >> "$GITHUB_ENV"
 
@@ -248,6 +255,11 @@ jobs:
             -DUSE_EXTERNAL_JSON=OFF \
             -DEigen3_DIR="C:/ProgramData/chocolatey/lib/eigen/share/cmake" \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$CONDA_LIB_PREFIX" \
+            -DARROW_USE_STATIC=OFF \
+            -DArrow_DIR="$CONDA_LIB_PREFIX/lib/cmake/Arrow" \
+            -DParquet_DIR="$CONDA_LIB_PREFIX/lib/cmake/Parquet" \
+            -DArrowDataset_DIR="$CONDA_LIB_PREFIX/lib/cmake/ArrowDataset" \
+            -DArrowAcero_DIR="$CONDA_LIB_PREFIX/lib/cmake/ArrowAcero" \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/openms-install"
 
       - name: Build and install OpenMS
