@@ -197,10 +197,16 @@ jobs:
           python-version: '3.11'
           use-mamba: true
 
+      # libxml2 is not decoration: OpenMS makes it REQUIRED the moment
+      # ArrowDataset is found ("Arrow Dataset (static) may pull in libxml2
+      # symbols; link explicitly"), and finding ArrowDataset is exactly what
+      # adding libarrow-dataset above does. Linux and macOS never hit this --
+      # their conda envs already carry libxml2 transitively -- so it is a
+      # Windows-only consequence of the same package list.
       - name: Configure conda packages and paths
         shell: bash -el {0}
         run: |
-          conda install -c conda-forge 'libarrow>=23' libparquet libarrow-dataset libarrow-acero libzip nlohmann_json -y
+          conda install -c conda-forge 'libarrow>=23' libparquet libarrow-dataset libarrow-acero libzip nlohmann_json libxml2 -y
           CONDA_ENV_PREFIX=$(conda info --json | python -c "import json,sys;print(json.load(sys.stdin)['active_prefix'])" | sed 's|\\|/|g')
           echo "CONDA_LIB_PREFIX=$CONDA_ENV_PREFIX/Library" >> "$GITHUB_ENV"
 
