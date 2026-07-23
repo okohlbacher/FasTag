@@ -23,11 +23,13 @@
 
 #include "FasTagger.h"
 #include "FastaFilter.h"
+#include "SpectrumSampler.h"
 
 #include <fstream>
 #include <map>
 #include <limits>
 #include <memory>
+#include <random>
 #include <vector>
 
 #ifdef _OPENMP
@@ -82,12 +84,22 @@ namespace
   public:
     using Flush = std::function<void(std::vector<MSSpectrum>&)>;
 
-    ChunkingConsumer(Flush flush, size_t peak_budget)
-      : flush_(std::move(flush)), budget_(peak_budget) {}
+    /// @param keep_fraction  <1.0 subsamples: each MS2 spectrum is kept with this
+    ///   probability (seeded, so a run is reproducible). 1.0 keeps everything.
+    ///   Only a fraction is offered here -- the push interface has no index, so an
+    ///   exact count would need reservoir sampling; the mzML path handles counts.
+    ChunkingConsumer(Flush flush, size_t peak_budget, double keep_fraction = 1.0,
+                     uint32_t seed = 1)
+      : flush_(std::move(flush)), budget_(peak_budget),
+        keep_(keep_fraction), rng_(seed) {}
 
     void consumeSpectrum(SpectrumType& s) override
     {
       if (s.getMSLevel() != 2 || s.empty() || s.getPrecursors().empty()) return;
+      // Subsample AFTER the MS2 filter so the fraction is of taggable spectra, and
+      // BEFORE buffering so dropped spectra never occupy memory. Called serially
+      // by transform(), so one RNG is safe.
+      if (keep_ < 1.0 && unit_(rng_) >= keep_) return;
       peaks_ += s.size();
       buf_.push_back(s);
       if (peaks_ >= budget_) { flush_(buf_); peaks_ = 0; }
@@ -111,6 +123,9 @@ namespace
   private:
     Flush flush_;
     size_t budget_;
+    double keep_ = 1.0;
+    std::mt19937 rng_;
+    std::uniform_real_distribution<double> unit_{0.0, 1.0};
     size_t peaks_ = 0;
     std::vector<MSSpectrum> buf_;
     ExperimentalSettings settings_;
@@ -203,6 +218,21 @@ protected:
     setMinInt_("peaks_per_window", 0);
     registerIntOption_("max_tags", "<n>", 50, "Tags reported per spectrum; 0 = unlimited", false);
     setMinInt_("max_tags", 0);
+
+    // Random subsampling of input spectra. For a taxon call (or a quick preview)
+    // a run does not need every spectrum -- a uniformly random subset gives the
+    // same lowest-common-ancestor at a fraction of the cost. Selection is seeded
+    // (-subsample_seed) so a run is reproducible. 0 / 0.0 disables. If both are
+    // set, the absolute count wins.
+    registerIntOption_("subsample_spectra", "<n>", 0,
+                       "Tag only this many randomly chosen input spectra; 0 = all", false);
+    setMinInt_("subsample_spectra", 0);
+    registerDoubleOption_("subsample_fraction", "<f>", 0.0,
+                          "Tag only this random fraction (0..1] of input spectra; 0 = all", false);
+    setMinFloat_("subsample_fraction", 0.0);
+    setMaxFloat_("subsample_fraction", 1.0);
+    registerIntOption_("subsample_seed", "<n>", 1, "Seed for -subsample_* selection", false);
+    setMinInt_("subsample_seed", 0);
     registerDoubleOption_("max_evalue", "<value>", 20.0, "E-value cutoff; 0 disables", false);
     setMinFloat_("max_evalue", 0.0);
     registerDoubleOption_("gap_penalty", "<value>", 100.0,
@@ -460,6 +490,33 @@ protected:
     }
     const size_t n_total = mzpeak_in ? 0 : (streaming ? ondisc->getNrSpectra() : exp.size());
 
+    // Subsampling selection. For the indexed (mzML) paths the mask is exact -- it
+    // is built over the spectrum indices up front. The count over ALL input
+    // spectra, not MS2 only: the fast reader does not know the MS level up front,
+    // and a fraction is proportional regardless. For the push-based mzPeak path,
+    // where there is no index, only a FRACTION is supported, applied as a seeded
+    // per-spectrum Bernoulli keep inside the consumer (below).
+    const size_t subsample_n = static_cast<size_t>(getIntOption_("subsample_spectra"));
+    const double subsample_frac = getDoubleOption_("subsample_fraction");
+    const uint32_t subsample_seed = static_cast<uint32_t>(getIntOption_("subsample_seed"));
+    const bool subsampling = subsample_n > 0 || subsample_frac > 0.0;
+    if (mzpeak_in && subsample_n > 0)
+    {
+      OPENMS_LOG_ERROR << "-subsample_spectra (absolute count) needs an index and is "
+                          "not supported for mzPeak input; use -subsample_fraction."
+                       << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    FasTag::SampleMask sample_mask;
+    if (subsampling && !mzpeak_in)
+    {
+      sample_mask = subsample_n > 0 ? FasTag::sampleByCount(n_total, subsample_n, subsample_seed)
+                                    : FasTag::sampleByFraction(n_total, subsample_frac, subsample_seed);
+      size_t sel = 0; for (char c : sample_mask) sel += c ? 1 : 0;
+      OPENMS_LOG_INFO << "Subsampling: tagging " << sel << " of " << n_total
+                      << " input spectra (seed " << subsample_seed << ")" << std::endl;
+    }
+
     // Warn when the fragment tolerance looks far too tight for the data.
     //
     // A high-resolution tolerance on low-resolution data is silent, and looks
@@ -663,7 +720,8 @@ protected:
       // Output is correct and byte-identical to the mzML path. Fine for files
       // small relative to RAM; prefer mzML for large runs until the upstream
       // reader streams. Tracked in doc/BACKLOG-mzpeak.md.
-      ChunkingConsumer consumer(flush_chunk, 1000u * 1000u);
+      ChunkingConsumer consumer(flush_chunk, 1000u * 1000u,
+                                subsample_frac > 0.0 ? subsample_frac : 1.0, subsample_seed);
       MzPeakFile().transform(in, &consumer);
       consumer.finish();   // the final partial chunk, otherwise silently dropped
       // Run-level settings for -out_spectra come from the consumer here; the
@@ -686,6 +744,7 @@ protected:
 #pragma omp for schedule(dynamic, 64)
       for (SignedSize i = 0; i < n_spec; ++i)
       {
+        if (!sample_mask.empty() && !sample_mask[static_cast<size_t>(i)]) continue;
         const MSSpectrum loaded = streaming ? reader->getSpectrum(static_cast<Size>(i))
                                             : MSSpectrum();
         const MSSpectrum& spec = streaming ? loaded : exp[static_cast<Size>(i)];
