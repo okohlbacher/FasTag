@@ -64,7 +64,7 @@ env:
   # has the two bugs found while integrating this (PR #1) -- Arrow casts that
   # silently drop every precursor, and a header that never installs. Move this
   # to main's SHA once that PR merges.
-  MZPEAK_REF: f9c8a72a74ed3418d67eac9d01a1c28f59365cc8
+  MZPEAK_REF: e233ade94856aec9b5b7c61c344614c16aec7084
 
 jobs:
   # ------------------------------------------------------- patched OpenMS

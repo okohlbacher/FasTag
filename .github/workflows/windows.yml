@@ -64,7 +64,7 @@ env:
   # feature/dia-pseudospectra -- so shipping the format means moving the base
   # off the release tag.
   OPENMS_BASE_SHA: bd4b89555629d68b431b189a4c841efbcc4dfeea
-  MZPEAK_REF: f9c8a72a74ed3418d67eac9d01a1c28f59365cc8
+  MZPEAK_REF: e233ade94856aec9b5b7c61c344614c16aec7084
   # The contrib commit the BASE ABOVE pins as a submodule, read directly out of
   # it rather than assumed: `git ls-tree bd4b895556 -- contrib` in a local
   # OpenMS checkout.
