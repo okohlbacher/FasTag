@@ -461,7 +461,25 @@ jobs:
           # rather than erroring, which cost several commits to track down
           # earlier in this same job. Plain command substitution has no such
           # problem.
-          cp -v "$CFG" "$(dirname "$CFG")"/OpenMSConfigVersion.cmake "$OPENMS_DIR/"
+          # Only copy when the two really are in different directories.
+          #
+          # The split this step works around is not universal: on the OpenMS
+          # base now being built the install is unified -- OpenMSConfig.cmake,
+          # OpenMSTargets.cmake and Modules/ all land in <prefix>/CMake/ -- and
+          # the unconditional copy then fed cp the same path twice:
+          #
+          #   cp: '.../openms-install/CMake/OpenMSConfig.cmake' and
+          #       '.../openms-install/CMake/OpenMSConfig.cmake' are the same file
+          #
+          # which is fatal under `set -e`. Guarding on the directories actually
+          # differing keeps the workaround for layouts that still split, and
+          # no-ops for layouts that do not.
+          CFG_DIR=$(dirname "$CFG")
+          if [ "$CFG_DIR" != "$OPENMS_DIR" ]; then
+            cp -v "$CFG" "$CFG_DIR/OpenMSConfigVersion.cmake" "$OPENMS_DIR/"
+          else
+            echo "Config and targets already share $OPENMS_DIR; nothing to copy."
+          fi
 
           echo "OPENMS_DIR=$OPENMS_DIR" >> "$GITHUB_ENV"
 
