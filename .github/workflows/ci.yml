@@ -616,6 +616,32 @@ jobs:
             -s "$OPENMS_INSTALL/lib" \
             -s "$CONDA_PREFIX/lib"
 
+          # Deduplicate LC_RPATH, or dyld refuses to launch the result:
+          #
+          #   Library not loaded: @executable_path/lib/libOpenMS.dylib
+          #   tried: '.../dist/FasTag/lib/libOpenMS.dylib'
+          #         (duplicate LC_RPATH '@executable_path/lib/')
+          #
+          # dylibbundler adds the -p prefix as an rpath without checking
+          # whether the binary already carries it, so an executable that
+          # arrives with that entry ends up with it twice -- and a duplicate
+          # LC_RPATH is fatal, not cosmetic. Seen on macos-x64 while
+          # macos-arm64 passed, so it depends on what the linker already put
+          # there; deduplicating unconditionally is correct either way and
+          # cheap. Caught by the portability guard below, which is exactly
+          # the class of bug that guard exists for.
+          rp_count() {
+            otool -l "$1" \
+              | awk '/LC_RPATH/{f=1;next} f&&/^ *path /{print $2; f=0}' \
+              | grep -cx '@executable_path/lib/' || true
+          }
+          while [ "$(rp_count dist/FasTag/FasTag.bin)" -gt 1 ]; do
+            install_name_tool -delete_rpath '@executable_path/lib/' dist/FasTag/FasTag.bin
+          done
+          echo "LC_RPATH entries after dedup:"
+          otool -l dist/FasTag/FasTag.bin \
+            | awk '/LC_RPATH/{f=1;next} f&&/^ *path /{print "  " $2; f=0}'
+
           cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FasTag/share-OpenMS
           # printf, not a heredoc: a heredoc's body has to be indented to
           # satisfy YAML's block-scalar rules, but leading whitespace before
