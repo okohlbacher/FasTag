@@ -1,16 +1,23 @@
 name: build
 
-# Linux x64/arm64 and macOS x64/arm64. All four green, tests included.
+# Linux x64/arm64 and macOS x64/arm64, tests included.
 #
-# Windows is deliberately in its own workflow (windows.yml), not here -- see
-# doc/BACKLOG-ci.md. It is the only platform with no OpenMS conda package, so
-# it builds OpenMS AND contrib from source (~100 minutes cold, minutes once
-# cached) rather than installing a binary in seconds; that cost difference,
-# not doubt about whether it works, is why it is not folded into this matrix.
+# These platforms USED to install OpenMS from bioconda in seconds. They no
+# longer can: bioconda's openms ships MzPeakFile.h but no MZPEAK member in its
+# FileTypes enum, so anything built against it silently omits mzPeak. Since
+# mzPeak read/write is a shipped feature, OpenMS is now built from source here
+# too -- patched with okohlbacher/OpenMS-mzPeakRW -- in its own cached job.
 #
-# The job VERIFIES that OpenMSConfig.cmake actually exists before configuring. A
-# package that ships tools but no development files would otherwise fail deep
-# inside CMake with a misleading error.
+# That makes every platform a source build, Windows included (still in
+# windows.yml, for the separate reason that it also needs contrib). Cold cost
+# is roughly 70 minutes per platform; warm runs restore a 230 MB install and
+# cost seconds. The cache key is the pair of pinned dependency SHAs, so the
+# only thing that triggers a rebuild is deliberately bumping one of them.
+#
+# The job VERIFIES that OpenMSConfig.cmake and MzPeakFile.h actually exist
+# before FasTag configures. Both have been silently absent at some point --
+# the header because it was in no CMake list at all -- and each time the
+# result was a green build that shipped without the feature.
 
 on:
   push:
@@ -38,11 +45,224 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The patched OpenMS that gives FasTag mzPeak read/write.
+#
+# bioconda's openms has MzPeakFile.h but no MZPEAK in its FileTypes enum, so
+# every binary built against it silently omits the format. Getting mzPeak into
+# a RELEASE binary therefore means building OpenMS from source -- there is no
+# packaged OpenMS anywhere that can read the format.
+#
+# Pinned by SHA, not branch, on both sides: this is a two-repo dependency and a
+# moving ref on either would silently change what the release contains. The
+# SHAs are also the cache key, so a bump invalidates exactly the right caches.
+env:
+  # OpenMS/OpenMS, the commit OpenMS-mzPeakRW's files are written against.
+  # Reachable from feature/dia-pseudospectra, NOT from develop -- a plain
+  # `git fetch <sha>` is refused by GitHub, hence the --deepen dance below.
+  OPENMS_BASE_SHA: bd4b89555629d68b431b189a4c841efbcc4dfeea
+  # okohlbacher/OpenMS-mzPeakRW. Currently the fix branch, not main: main still
+  # has the two bugs found while integrating this (PR #1) -- Arrow casts that
+  # silently drop every precursor, and a header that never installs. Move this
+  # to main's SHA once that PR merges.
+  MZPEAK_REF: f9c8a72a74ed3418d67eac9d01a1c28f59365cc8
+
 jobs:
-  # ---------------------------------------------------------------- conda path
+  # ------------------------------------------------------- patched OpenMS
+  # Its own job, for the reason windows.yml already documents: actions/cache
+  # saves in a post-hook gated on the JOB having succeeded. Building OpenMS in
+  # the same job as FasTag means every FasTag-side failure also throws away a
+  # ~70-minute OpenMS build, and the next push pays for it again.
+  #
+  # Splitting it means this job's success -- and therefore its cache save --
+  # depends only on OpenMS building, which is the expensive part and the part
+  # that does not change between FasTag commits.
+  openms:
+    name: openms-${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64,   runner: ubuntu-24.04 }
+          - { name: linux-arm64, runner: ubuntu-24.04-arm }
+          - { name: macos-arm64, runner: macos-14 }
+          - { name: macos-x64,   runner: macos-15-intel }
+
+    steps:
+      - name: Restore patched OpenMS
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: openms-install
+          key: openms-mzpeak-${{ matrix.name }}-${{ env.OPENMS_BASE_SHA }}-${{ env.MZPEAK_REF }}-v1
+
+      # Everything below is skipped entirely on a cache hit, which is the
+      # normal case: these SHAs only move when the dependency is deliberately
+      # bumped, so a warm run costs seconds.
+      - name: Fetch OpenMS at the pinned base commit
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q openms-src
+          cd openms-src
+          git remote add origin https://github.com/OpenMS/OpenMS.git
+          # A bare `git fetch origin <sha>` is refused ("couldn't find remote
+          # ref") -- GitHub only serves advertised refs. The commit is an
+          # ancestor of feature/dia-pseudospectra, so fetch that tip shallow
+          # and deepen until the commit is present. --deepen=200 was enough
+          # (the commit sits ~170 back); the loop keeps it honest if that
+          # distance grows.
+          git fetch --depth 1 origin feature/dia-pseudospectra
+          for _ in 1 2 3 4 5; do
+            if git cat-file -e "$OPENMS_BASE_SHA^{commit}" 2>/dev/null; then break; fi
+            git fetch -q --deepen=200 origin feature/dia-pseudospectra
+          done
+          git cat-file -e "$OPENMS_BASE_SHA^{commit}"
+          git checkout -q "$OPENMS_BASE_SHA"
+
+      - name: Overlay mzPeak support
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q https://github.com/okohlbacher/OpenMS-mzPeakRW.git mzpeak-rw
+          git -C mzpeak-rw checkout -q "$MZPEAK_REF"
+          # Copy every tracked file into place, preserving paths. The repo is a
+          # file-for-file overlay on the base commit, so this IS the patch.
+          # Fail loudly on an unexpected layout rather than silently building a
+          # stock OpenMS and shipping binaries with no mzPeak support -- the
+          # exact failure mode this whole job exists to prevent.
+          test -f mzpeak-rw/src/openms/source/FORMAT/MzPeakFile.cpp
+          test -f mzpeak-rw/src/openms/include/OpenMS/FORMAT/MzPeakFile.h
+          ( cd mzpeak-rw && git ls-files -z 'src/*' ) \
+            | while IFS= read -r -d '' f; do
+                mkdir -p "openms-src/$(dirname "$f")"
+                cp "mzpeak-rw/$f" "openms-src/$f"
+              done
+          grep -q MZPEAK openms-src/src/openms/include/OpenMS/FORMAT/FileTypes.h
+          grep -q MzPeakFile.h openms-src/src/openms/include/OpenMS/FORMAT/sources.cmake
+
+      - name: Install OpenMS build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: omsbuild
+          create-args: >-
+            libarrow>=23
+            libparquet
+            libarrow-dataset
+            libarrow-acero
+            nlohmann_json
+            xerces-c
+            libsvm
+            eigen
+            zlib
+            bzip2
+            libzip
+            hdf5
+            libcurl
+            libboost-devel
+            glpk
+            coin-or-cbc
+            coin-or-utils
+            qt6-main
+            cmake
+            ninja
+            cxx-compiler
+          condarc: |
+            channels:
+              - conda-forge
+          init-shell: bash
+          cache-environment: true
+
+      - name: Configure OpenMS
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          # Arrow pinned explicitly to the conda prefix.
+          #
+          # A system/Homebrew Arrow otherwise wins the search and, being a
+          # partial install, fails with "target Parquet::parquet_static not
+          # found" during generate. conda-forge ships shared only, hence
+          # ARROW_USE_STATIC=OFF; likewise BOOST_USE_STATIC, without which
+          # BoostConfig rejects every variant with "No suitable build variant".
+          #
+          # CMAKE_FIND_FRAMEWORK=LAST is the macOS curl-framework trap this
+          # repo already documents for its own build: CMake searches
+          # frameworks first, so a third-party /Library/Frameworks/libcurl
+          # shadows the SDK libcurl that libOpenMS links, and the result dies
+          # at startup with a dangling @rpath. Harmless on Linux.
+          cmake -S openms-src -B openms-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/openms-install" \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DCMAKE_FIND_FRAMEWORK=LAST \
+            -DARROW_USE_STATIC=OFF -DBOOST_USE_STATIC=OFF \
+            -DArrow_DIR="$CONDA_PREFIX/lib/cmake/Arrow" \
+            -DParquet_DIR="$CONDA_PREFIX/lib/cmake/Parquet" \
+            -DArrowDataset_DIR="$CONDA_PREFIX/lib/cmake/ArrowDataset" \
+            -DArrowAcero_DIR="$CONDA_PREFIX/lib/cmake/ArrowAcero" \
+            -DQT_HOST_PATH="$CONDA_PREFIX" \
+            -DWITH_GUI=OFF -DENABLE_DOCS=OFF -DENABLE_UPDATE_CHECK=OFF \
+            -DHAS_XSERVER=OFF
+
+      - name: Build the OpenMS library only
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          # The library, not the ~200 TOPP executables. FasTag links libOpenMS
+          # and nothing else, and building the tools roughly triples this job.
+          cmake --build openms-build --target OpenMS
+
+      - name: Install OpenMS
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          # Two steps, because a plain `cmake --install` walks into src/topp
+          # and dies on the executables the step above deliberately did not
+          # build -- taking OpenMSConfig.cmake, which is installed AFTER that
+          # recursion, down with it.
+          #
+          # First pass installs what the subdirectories provide (the library,
+          # headers, share/OpenMS) and is allowed to fail at src/topp. Second
+          # pass runs ONLY the top-level rules -- CMAKE_INSTALL_LOCAL_ONLY
+          # suppresses the recursion -- which is where OpenMSConfig.cmake and
+          # the exported targets live.
+          cmake --install openms-build || true
+          cmake -DCMAKE_INSTALL_LOCAL_ONLY=1 -P openms-build/cmake_install.cmake
+
+      - name: Verify the install is usable and has mzPeak
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          # Guard the two things that were silently wrong when this was first
+          # built. MzPeakFile.h in particular was in no CMake list at all, so
+          # it compiled and installed cleanly while leaving every downstream
+          # consumer without the class (OpenMS-mzPeakRW PR #1).
+          for f in lib/cmake/OpenMS/OpenMSConfig.cmake \
+                   include/OpenMS/FORMAT/MzPeakFile.h \
+                   include/OpenMS/FORMAT/FileTypes.h \
+                   share/OpenMS/CV/psi-ms.obo; do
+            if [ ! -e "openms-install/$f" ]; then
+              echo "::error::patched OpenMS install is missing $f"
+              exit 1
+            fi
+          done
+          grep -q MZPEAK openms-install/include/OpenMS/FORMAT/FileTypes.h
+          grep -q "void store(" openms-install/include/OpenMS/FORMAT/MzPeakFile.h
+          du -sh openms-install
+
+  # ------------------------------------------------------------ FasTag
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    needs: openms
     # write, not the default: needed only for the tag-triggered release-asset
     # upload below. Scoped to this job rather than the workflow, since nothing
     # else here needs it. GitHub already forces a read-only token for
@@ -71,8 +291,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `extra` carries per-platform conda packages. macOS asks for
-          # llvm-openmp explicitly because Apple's clang ships no OpenMP runtime.
+          # `extra` carries per-platform conda packages on top of the shared
+          # OpenMS runtime set. macOS asks for llvm-openmp explicitly because
+          # Apple's clang ships no OpenMP runtime.
           #
           # It is already present TRANSITIVELY -- run 29891819334 found OpenMP 5.1
           # on macos-arm64 without asking, because libopenblas pulls llvm-openmp
@@ -120,13 +341,43 @@ jobs:
       # linux-x64 passed without qt6-main and the ARM/macOS runners did not, so
       # the base image differs by platform. Requesting it explicitly removes the
       # dependence on whatever the runner happens to ship.
-      - name: Install OpenMS from bioconda
+      - name: Restore patched OpenMS
+        uses: actions/cache@v4
+        with:
+          path: openms-install
+          key: openms-mzpeak-${{ matrix.name }}-${{ env.OPENMS_BASE_SHA }}-${{ env.MZPEAK_REF }}-v1
+          fail-on-cache-miss: true
+
+      # The RUNTIME half of what the openms job built against, plus FasTag's own
+      # toolchain. libOpenMS links Arrow, Qt, Xerces and the rest dynamically,
+      # so they have to be present here too -- not just where it was compiled.
+      #
+      # dylibbundler is NOT here: it is a Homebrew package, not a conda-forge
+      # one (`dylibbundler =* * does not exist`), and is installed by brew in
+      # its own step further down. patchelf, its Linux counterpart, IS a real
+      # conda-forge package.
+      - name: Install toolchain and OpenMS runtime dependencies
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: fastag
           create-args: >-
-            openms>=3.5
-            libboost-headers
+            libarrow>=23
+            libparquet
+            libarrow-dataset
+            libarrow-acero
+            nlohmann_json
+            xerces-c
+            libsvm
+            eigen
+            zlib
+            bzip2
+            libzip
+            hdf5
+            libcurl
+            libboost-devel
+            glpk
+            coin-or-cbc
+            coin-or-utils
             qt6-main
             cmake
             ninja
@@ -135,23 +386,24 @@ jobs:
           condarc: |
             channels:
               - conda-forge
-              - bioconda
           init-shell: bash
           cache-environment: true
 
-      - name: Verify OpenMS ships development files
+      - name: Point the build at the patched OpenMS
         shell: bash -el {0}
         run: |
-          # A package with tools but no headers/CMake config would otherwise fail
-          # deep inside find_package with an unhelpful message.
-          CFG=$(find "$CONDA_PREFIX" -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
-          if [ -z "$CFG" ]; then
-            echo "::error::OpenMS conda package provides no OpenMSConfig.cmake."
-            echo "Contents under lib/cmake:"; ls -la "$CONDA_PREFIX"/lib/cmake 2>/dev/null || true
+          set -euo pipefail
+          CFG="$PWD/openms-install/lib/cmake/OpenMS/OpenMSConfig.cmake"
+          if [ ! -f "$CFG" ]; then
+            echo "::error::restored OpenMS cache has no OpenMSConfig.cmake"
+            ls -la openms-install/lib/cmake/OpenMS 2>/dev/null || true
             exit 1
           fi
-          echo "OpenMSConfig.cmake: $CFG"
           echo "OPENMS_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
+          # Every downstream step needs the library and its shared-data
+          # directory; the tests and the smoke run both load CV terms.
+          echo "OPENMS_INSTALL=$PWD/openms-install" >> "$GITHUB_ENV"
+          echo "OPENMS_DATA_PATH=$PWD/openms-install/share/OpenMS" >> "$GITHUB_ENV"
 
       - name: Configure
         shell: bash -el {0}
@@ -285,18 +537,31 @@ jobs:
           rm -rf dist && mkdir -p dist/FasTag/lib
           cp build/FasTag dist/FasTag/FasTag.bin
 
+          # TWO source prefixes now, not one. libOpenMS and libOpenSwathAlgo
+          # come from the patched OpenMS install; everything they in turn need
+          # (Arrow, Qt, Xerces, BLAS, ...) comes from the conda env. Missing
+          # the first would bundle every dependency EXCEPT the one library the
+          # tool is actually built around.
           LIBDIR="$CONDA_PREFIX/lib"
-          ldd dist/FasTag/FasTag.bin | grep "$LIBDIR" | awk '{print $1}' | sort -u > /tmp/needed.txt
+          OMSLIB="$OPENMS_INSTALL/lib"
 
-          while read -r name; do
-            [ -z "$name" ] && continue
-            if [ -L "$LIBDIR/$name" ]; then
-              real=$(readlink -f "$LIBDIR/$name")
+          # Match on ldd's RESOLVED path rather than the soname, so a library
+          # is attributed to whichever prefix it actually came from instead of
+          # being looked up in a prefix that may not hold it.
+          ldd dist/FasTag/FasTag.bin \
+            | sed -n 's/.*=> \(\/[^ ]*\).*/\1/p' \
+            | grep -E "^($LIBDIR|$OMSLIB)/" | sort -u > /tmp/needed.txt
+
+          while read -r path; do
+            [ -z "$path" ] && continue
+            name=$(basename "$path")
+            if [ -L "$path" ]; then
+              real=$(readlink -f "$path")
               realname=$(basename "$real")
               [ -f "dist/FasTag/lib/$realname" ] || cp -L "$real" "dist/FasTag/lib/$realname"
               [ -e "dist/FasTag/lib/$name" ] || ln -s "$realname" "dist/FasTag/lib/$name"
             else
-              cp -L "$LIBDIR/$name" "dist/FasTag/lib/$name"
+              [ -f "dist/FasTag/lib/$name" ] || cp -L "$path" "dist/FasTag/lib/$name"
             fi
           done < /tmp/needed.txt
 
@@ -316,7 +581,7 @@ jobs:
             patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
           done
 
-          cp -r "$CONDA_PREFIX/share/OpenMS" dist/FasTag/share-OpenMS
+          cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FasTag/share-OpenMS
           # printf, not a heredoc: a heredoc's body has to be indented to
           # satisfy YAML's block-scalar rules, but leading whitespace before
           # `#!` breaks shebang recognition -- the kernel requires it at byte
@@ -348,9 +613,10 @@ jobs:
             -x dist/FasTag/FasTag.bin \
             -d dist/FasTag/lib \
             -p '@executable_path/lib/' \
+            -s "$OPENMS_INSTALL/lib" \
             -s "$CONDA_PREFIX/lib"
 
-          cp -r "$CONDA_PREFIX/share/OpenMS" dist/FasTag/share-OpenMS
+          cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FasTag/share-OpenMS
           # printf, not a heredoc: a heredoc's body has to be indented to
           # satisfy YAML's block-scalar rules, but leading whitespace before
           # `#!` breaks shebang recognition -- the kernel requires it at byte
