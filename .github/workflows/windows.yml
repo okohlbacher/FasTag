@@ -62,27 +62,36 @@ env:
   # This replaces the old `OPENMS_TAG: release/3.5.0`. mzPeak does not exist on
   # 3.5.0 -- OpenMS-mzPeakRW is written against a commit on
   # feature/dia-pseudospectra -- so shipping the format means moving the base
-  # off the release tag. NOTE the knock-on risk: CONTRIB_REV below was read out
-  # of release/3.5.0's submodule pointer, so it is no longer guaranteed to be
-  # the contrib this base expects. Kept because contrib moves rarely and a
-  # mismatch is more likely to be visible as a build failure than as silent
-  # wrongness -- but it is the first thing to suspect if this job breaks in a
-  # way ci.yml does not.
-  #
-  # It broke exactly that way on the first attempt: this contrib builds Arrow
-  # 22, the new base requires >= 23, and contrib's arrow_static.lib won the
-  # search ahead of conda's. Fixed by pinning Arrow_DIR/Parquet_DIR at the
-  # conda env in the configure step below rather than by moving contrib --
-  # conda is where OpenMS's own Windows CI gets Arrow anyway, so this narrows
-  # the divergence rather than widening it.
+  # off the release tag.
   OPENMS_BASE_SHA: bd4b89555629d68b431b189a4c841efbcc4dfeea
   MZPEAK_REF: f9c8a72a74ed3418d67eac9d01a1c28f59365cc8
-  # The contrib commit release/3.5.0 pins as a submodule, read directly out of
-  # that tag rather than assumed: `git ls-tree release/3.5.0 -- contrib` in a
-  # local OpenMS checkout. Using this exact commit rather than contrib's own
-  # HEAD is deliberate -- a mismatched contrib is a plausible source of build
-  # failures that would look like an OpenMS or FasTag bug and is not.
-  CONTRIB_REV: 4bec7d958de69ff1201bd6f01a7d67ccaa5ae2bd
+  # The contrib commit the BASE ABOVE pins as a submodule, read directly out of
+  # it rather than assumed: `git ls-tree bd4b895556 -- contrib` in a local
+  # OpenMS checkout.
+  #
+  # This used to be release/3.5.0's pointer (4bec7d95...), inherited from when
+  # the base was that tag. Moving the base without moving this broke the build
+  # twice, in the two ways a stale contrib can:
+  #
+  #   1. contrib built Arrow 22 while the new base requires >= 23, and
+  #      contrib's arrow_static.lib won the search ahead of conda's. Fixed
+  #      separately by pinning Arrow_DIR/Parquet_DIR at the conda env in the
+  #      configure step -- conda is where OpenMS's own Windows CI gets Arrow
+  #      anyway, so that narrows the divergence from their recipe.
+  #   2. contrib's Boost 1.81 headers then failed to compile under MSVC 19.44
+  #      while building SYSTEM/JavaInfo.cpp:
+  #
+  #        boost/process/detail/windows/pipe_in.hpp(72):
+  #          error C3878: syntax error: unexpected token 'ec' following
+  #                       'expression'
+  #          error C7510: 'error_code': use of dependent type name must be
+  #                       prefixed with 'typename'
+  #
+  # (2) is not workaroundable from here -- the base simply wants a different
+  # contrib -- so this is now derived from the base itself, which is the same
+  # method the original pin used, just applied to the base actually built.
+  # Changing it invalidates the contrib cache and costs one ~37-minute rebuild.
+  CONTRIB_REV: 186aacfbc1157719735b497cd6de1b3e83289eea
 
 jobs:
   # ---------------------------------------------------------- OpenMS itself
