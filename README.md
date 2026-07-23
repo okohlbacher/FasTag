@@ -131,8 +131,9 @@ FasTag -in run.mzML -out tags.tsv -deisotope -gaps 1
 # only tags occurring in a protein of interest, plus the spectra carrying them
 FasTag -in run.mzML -out tags.tsv -fasta AGXT.fasta -out_spectra hits.mzML
 
-# mzPeak input, if this build has it
+# mzPeak in, mzPeak out -- any combination of mzML and mzpeak works
 FasTag -in run.mzpeak -out tags.tsv
+FasTag -in run.mzML   -out tags.tsv -out_spectra hits.mzpeak
 ```
 
 **Set the fragment tolerance to match the analyser.** A high-resolution
@@ -141,25 +142,36 @@ an ion-trap file, 20 ppm returned 3,007 tags where 0.3 Da returned 824,959.
 FasTag infers resolution from peak spacing and warns when the two disagree, but
 it cannot know the analyser, so the setting is yours.
 
-### mzPeak input
+### mzPeak
 
-Available when the OpenMS this was built against provides `MzPeakFile` —
-configure reports which you have. Output is byte-identical to reading the same
-data as mzML. Reading only: `-out_spectra` needs mzML input.
+[mzPeak](https://github.com/OpenMS/mzpeak) is a Parquet-backed format (Parquet
+tables in a ZIP container). FasTag **reads and writes** it: `-in` accepts
+`.mzpeak`, `-out_spectra` writes it, and all four in/out combinations work.
+Tagging is unaffected by which you use — reading a run as mzpeak gives the same
+spectra as reading it as mzML, and a run written to mzpeak and tagged again
+reproduces the original tag set exactly.
+
+The released binaries have it. Building it yourself needs an OpenMS with mzPeak
+support ([OpenMS-mzPeakRW](https://github.com/okohlbacher/OpenMS-mzPeakRW)) —
+stock and bioconda OpenMS do not have it, and configure reports which you got:
+
+```
+-- FasTag: mzPeak input available (-in accepts .mzpeak)
+```
 
 **Not memory-bounded, upstream** — `MzPeakFile::transform()` currently
 materialises the whole run rather than streaming it, unlike the O(threads)
-mzML path. Prefer mzML for large runs until the upstream reader streams; see
-[doc/BACKLOG-mzpeak.md](doc/BACKLOG-mzpeak.md).
+mzML path: a 155 MB `.mzpeak` peaks around 1.7 GB. Prefer mzML for runs large
+relative to RAM; see [doc/BACKLOG-mzpeak.md](doc/BACKLOG-mzpeak.md).
 
 ## Command-line reference
 
 | Option | Default | Meaning |
 |---|---|---|
-| `-in <file>` | — | Input spectra: mzML, or mzpeak if this build has it |
+| `-in <file>` | — | Input spectra: mzML or mzpeak |
 | `-out <file>` | — | Tag list, tab-separated |
 | `-fasta <file>` | none | Report only tags occurring in these sequences |
-| `-out_spectra <file>` | none | Write spectra carrying a reported tag to this mzML. Needs memory proportional to the *file*, not the thread count, unlike every other path |
+| `-out_spectra <file>` | none | Write spectra carrying a reported tag here, as mzML or mzpeak (by extension). Needs memory proportional to the *file*, not the thread count, unlike every other path |
 | `-tag_length <n>` | 3 | Seed tag length in residues |
 | `-extension <n>` | 0 | Max residues appended per terminus; 0 disables extension |
 | `-gaps <n>` | 0 | Allow a tag to cross one missing peak (0 or 1) |
@@ -270,7 +282,7 @@ without filtering anything out:
   are all off; their measured gains come from one acquisition type each.
 - **No modification support.** Residues are the unmodified 19, so labelled
   samples (TMT and similar) will not match tags spanning a modified residue.
-- **mzPeak input is not memory-bounded** (see above); mzML is the tested path.
+- **mzPeak is not memory-bounded on read** (see above), an upstream property of `MzPeakFile::transform()` rather than of FasTag.
 
 ## Licence and provenance
 

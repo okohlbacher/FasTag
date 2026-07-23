@@ -1,7 +1,7 @@
 # mzPeak: what works, what does not, what is next
 
-Reading `.mzpeak` works and produces byte-identical output to the same data as
-mzML. It is **not memory-bounded**, and that is upstream rather than here.
+Reading **and writing** `.mzpeak` work. Reading is not memory-bounded, and that
+is upstream rather than here.
 
 ## What shipped
 
@@ -12,7 +12,15 @@ Detected at configure time, so the same source builds either way:
 -- FasTag: mzPeak input available (-in accepts .mzpeak)
 ```
 
-Reading only. `-out_spectra` still writes mzML, and is refused with mzPeak input.
+Writing too: `-out_spectra hits.mzpeak`. All four in/out combinations work, and
+the earlier blanket refusal of `-out_spectra` with mzPeak input is gone --
+that path only ever needed the run-level `ExperimentalSettings` wired in from
+the streaming consumer, which the mzML paths get from `getMetaData()` or the
+loaded map.
+
+Writing does NOT go through `FileHandler::storeExperiment()`: it has no mzPeak
+branch, so asking it for one silently writes a different format. `MzPeakFile`
+is called directly.
 
 ### How
 
@@ -37,6 +45,36 @@ Two decisions worth keeping:
 | output vs mzML | **byte-identical**, 847,528 tags on the Eclipse DDA file |
 | determinism | identical at 1, 4 and 16 threads |
 | stock OpenMS | still builds; `.mzpeak` refused with an actionable message |
+| mzML -> mzpeak -> tags | **exact round-trip**: 127,035 tags, identical to tagging the source mzML |
+| mzpeak -> tags | 42,092 MS2 / 883,939 tags on a 155 MB Lumos file -- same spectrum count as its mzML |
+| mzpeak -> mzpeak -> tags | 883,939 tags, unchanged through the write and re-read |
+
+### Two upstream bugs found while wiring this up
+
+Both silent, both fixed in [OpenMS-mzPeakRW PR #1](https://github.com/okohlbacher/OpenMS-mzPeakRW/pull/1),
+and either one alone makes mzPeak unusable from an *installed* OpenMS.
+
+1. **Every `dynamic_pointer_cast<arrow::*Array>` returns null** when Arrow is
+   built with hidden symbol visibility -- the conda-forge default. `libOpenMS`
+   and `libarrow` hold distinct typeinfo, the cross-DSO `dynamic_cast` cannot
+   match, and the reader silently drops precursors, CV params and the profile
+   `mz_delta_model`. Measured: **0 of 42,092** precursors survived a load, while
+   the Parquet held all 42,092. FasTag needs a precursor to tag, so every
+   spectrum was rejected and the run reported a confident zero.
+
+   Diagnosed by replicating `readPrecursors_`'s exact logic in a standalone
+   Arrow program linked against the *same* libarrow, where it found all 42,092
+   rows -- so the difference is purely the shared-library boundary, not the data.
+
+2. **`MzPeakFile.h` was in no CMake list**, so it never installed. Invisible
+   when building against an OpenMS *build tree* (which exposes source includes
+   directly), fatal for a consumer of an install: `FileTypes.h` ships with
+   `MZPEAK` but the class is absent, so FasTag's header-based feature detection
+   silently produced a build with no mzPeak support.
+
+Worth remembering as a class: both failures were *green builds that shipped
+without the feature*, which is why CI now asserts `MzPeakFile.h` is present in
+the installed OpenMS rather than trusting the build to have noticed.
 
 ## The problem: transform() is not streaming
 
