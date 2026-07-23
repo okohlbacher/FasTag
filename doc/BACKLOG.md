@@ -247,3 +247,48 @@ the real data confirmed, so it is now the default rather than a suggestion.
 
 The Sage ground truth this entry originally waited for is still gone (see
 `TEST-DATA.md`); PXD000001 stood in for it, as it did for `-gap_penalty`.
+
+## Research: how MS taggers are used in the literature (2021+) — candidate features
+
+Full survey with citations and adversarial verdicts in
+[RESEARCH-tagger-uses-2021plus.md](RESEARCH-tagger-uses-2021plus.md). Distilled
+here as a feature backlog. Two standing principles gate everything: tagging is a
+sensitive **prefilter** (recall-biased; specificity comes from later stages), and
+synthetic evidence cannot flip a shipped default.
+
+**The real competitor is the fragment-ion index** (MSFragger/Sage/Comet-FI), not
+other taggers. FasTag should not claim to beat it on ordinary open search. Its
+defensible ground is (i) database-free operation, (ii) multi-PTM / mutation
+reconciliation where a precursor-offset open search struggles, and (iii) being a
+calibrated *tag/feature generator* for the rescoring and assembly ecosystems.
+
+Candidate features, with verdicts (ADOPT / MAYBE / SKIP):
+
+| # | Feature | Driving use | Verdict |
+|---|---|---|---|
+| F1 | Flank-mass reconciliation, delta = mod/mutation | open/blind PTM, variants | ADOPT — this is TagRecon stage A+; validated by PIPI2 (2024), Open-pFind |
+| F2 | FM-/substring index for tag→DB lookup | scale of F1 | ADOPT — reuse a succinct-index lib; enabling substrate |
+| F3 | Gap tags (mass-gap residues) | noisy/ion-starved spectra | ADOPT (already have `-gaps`); cap at 1 |
+| F4 | **Calibrated tag confidence / per-residue FDR** | rescoring, taxonomy, variant QC | ADOPT — foundational; differentiating; build first |
+| F5 | Mass-shift localization (shifted-fragment method) | open PTM; the mod-localization roadmap | ADOPT for localization; interoperate with PTM-Shepherd, don't reimplement |
+| F6 | Multi-length tags as a recall/specificity knob | DB search, HLA, taxonomy | ADOPT — but default recall-y (short); long tags opt-in |
+| F7 | Tag-agreement features for MS2Rescore/Oktoberfest | rescoring (+10-30% IDs) | ADOPT — cheap, high-ROI, repositions FasTag as a feature source |
+| F8 | **Native tag→taxonomic/species detector** | metaproteomics | ADOPT — most differentiated; no mainstream *tagger* ships this (cf. MegaPX, NovoLign). In progress |
+| F9 | Single-substitution (mutation) tags | proteogenomics | MAYBE→ADOPT — nearly free once F1 exists; emit as flagged *unvalidated* variants only |
+| F10 | Low-latency single-spectrum tagging | real-time / instrument-control search | MAYBE — build the streaming path + benchmark; vendor integration out of scope |
+| F11 | Glyco spectrum flag (oxonium detector) | glycoproteomics | SKIP full glyco; MAYBE the flag only |
+| F12 | Top-N tags per spectrum for chimeric/DIA | chimeric DDA, DIA | MAYBE — top-N yes (already have `-max_tags`); full DIA deconvolution SKIP |
+| F13 | **Standard self-describing output** (ProForma / mzTab / mzIdentML / USI) | all downstreams | ADOPT — unglamorous, force-multiplying; low cost |
+| F14 | Overlap-friendly long reads for antibody assembly | mAb/repertoire de novo | MAYBE — nearly free given F4+F13 (feed Stitch/ALPS); don't build an assembler |
+| F15 | Cross-link diagnostic-ion tagging | XL-MS | SKIP — crowded specialist space |
+
+**Top 5 to prioritize** (from the report): **F4** (calibrated tag confidence —
+foundational for everything trustworthy downstream), **F1+F2** (reconciliation on
+a substring index — the core extension, already begun as TagRecon stage A),
+**F8** (native taxonomic detector — most differentiated; in progress), **F7+F13**
+(rescoring-feature output in a standard format — cheap, force-multiplying), **F5**
+(mass-shift localization — on the roadmap, complements F1).
+
+Several F1/F5/F8 items are already under way (TagRecon stage A; the modification
+support in v0.13.0; the species detector on `feature/species-detector`). F4, F7
+and F13 are the highest-leverage *not-yet-started* items.
