@@ -66,7 +66,7 @@ Revisit when the format stabilises and `MzPeakFile` lands in mainline. The cheap
 first step, whenever that is: round-trip a benchmark mzML through
 `MzPeakFile::store` and back, and confirm precursor m/z and charge survive.
 
-## Gapped tags were overranked — FIXED, with a caveat
+## Gapped tags were overranked — FIXED, and now validated on real data
 
 `-gap_penalty` (default 100) multiplies a gapped tag's E-value for **ranking
 only**; the cutoff still sees the uncorrected value, so no tag is ever removed.
@@ -74,21 +74,70 @@ Rank-1 accuracy improved in all 12 profile × tag-length cells of
 `bench/benchmark.cpp`, and on real ddaPASEF the tag set is byte-identical while
 the rank-1 gapped share falls 96.4% → 76.7%.
 
-**The caveat**: 100 is calibrated on synthetic spectra, not derived. The
-multiplicity argument (a gap edge picks from 190 pairs where an ordinary edge
-tests 19 residues) justifies only ~10; measurement says the true over-scoring is
-roughly an order of magnitude larger, and rank-1 accuracy is still creeping up at
-500. The curve has no clean optimum, which is the signature of "just rank all
-contiguous tags above all gapped ones" — near enough true, since a contiguous
-rank-1 tag is right ~55% of the time against ~15% for a gapped one.
+**Real-ground-truth validation, done.** The synthetic calibration this entry used
+to caveat has been checked against a real search: [PXD000001](
+https://www.ebi.ac.uk/pride/archive/projects/PXD000001), the canonical
+ProteomeXchange demo dataset (Erwinia carotovora, TMT 6-plex, LTQ Orbitrap
+Velos HCD) — chosen because it ships a Mascot `.dat` search of its own mzML,
+giving real per-spectrum PSMs rather than a re-run search of unknown quality.
+Ground truth: top hit per query from the `.dat`'s `peptides`/`decoy_peptides`
+sections, target-decoy FDR ≤ 1% (score ≥ 16.85, 2,254 of 6,103 queries).
+Tag correctness re-derives `nterm_mass`/`cterm_mass` against the identified
+peptide's real fragment masses, which for this dataset means accounting for the
+search's fixed mods (TMT6plex on the N-terminus and every K, Methylthio on every
+C) — omitting them silently zeroes out every real match, which is exactly what
+happened on the first pass.
 
-Worth revisiting **only with real ground truth**. Regenerating the Sage PSMs (see
-`TEST-DATA.md`) is the prerequisite; until then this constant rests on a
-generator this project wrote to test itself, which is a real limitation.
+`-tag_length 4 -gaps 1`, threads varied only for speed:
 
-Related, and unfixed: within the gapped family the E-value carries almost no
-information about correctness — r1-gapped accuracy sits at 15-20% regardless of
-penalty. Pushing the family down helps; ordering *inside* it does not seem to.
+| `-gap_penalty` | rank-1 | top-5 | total recall | gapped share of rank-1 | gapped rank-1 correct |
+|---|---|---|---|---|---|
+| 1 | 69.0% | 90.8% | 98.05% | 34.7% | 25.4% |
+| 10 | 83.0% | 95.2% | 98.05% | 10.3% | 27.6% |
+| 30 | 85.1% | 95.7% | 98.05% | 6.0% | 29.9% |
+| **100 (default)** | **86.4%** | **96.1%** | **98.05%** | **3.2%** | **27.8%** |
+| 300 | 86.8% | 96.2% | 98.05% | 2.2% | 24.0% |
+| 1000 | 86.9% | 96.4% | 98.05% | 2.0% | 22.2% |
+| 10000 | 87.1% | 96.4% | 98.05% | 1.6% | 18.9% |
+
+Total recall is flat, exactly as designed — the penalty reorders and never
+removes a tag. **Real data confirms the shape the synthetic curve predicted**:
+rank-1 keeps climbing with no clean optimum, and 100 already sits at its knee —
+10x to 1000 buys +0.5 rank-1 points, another 10x to 10000 buys +0.2 more. The
+multiplicity argument that originally suggested ~10 undersold it; measurement
+(synthetic and now real) agrees the true over-scoring is roughly an order of
+magnitude larger, which is where 100 came from. **No change to the default**:
+real evidence supports the existing calibration rather than overturning it.
+
+**Scope of this validation, stated plainly**: one dataset, one (older,
+TMT-labelled) instrument, 2,254 PSMs. The gapped-family rank-1 counts at high
+penalty are small (37-72 spectra), so the 19-30% correctness range within that
+family is noisy, not a precise curve. Confirms direction and rough magnitude;
+does not replace validation on additional real datasets if the question is
+reopened.
+
+**A second, non-TMT dataset was attempted and found too sparse to add a real
+data point.** [PXD059878](https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/10/PXD059878/)
+(`thermo-ltq-xl-iontrap`, a PC4-acetylation/phosphorylation site-mapping study,
+label-free, real linear-ion-trap CID) ships a Proteome Discoverer `.msf` — a
+SQLite database, directly queryable — with 53 high-confidence (PD "High",
+Rank 1) PSMs. Real ground truth, correctly scored (including per-PSM Phospho/
+Oxidation position deltas, not the fixed-mod rule PXD000001 needed), but only
+2 of the 50 matching spectra recovered a correct tag at any `-gap_penalty`,
+let alone at rank 1 — not enough signal for a curve. Two compounding reasons,
+both real properties of this dataset rather than a bug: it is a targeted PTM
+study, so most identified peptides are short and carry a variable
+modification FasTag cannot see (no modification support — a tag spanning a
+phosphorylated residue simply will not be found); and it is old, low-resolution
+linear-ion-trap CID, which produces markedly sparser fragment ladders than the
+HCD/Orbitrap data used above even before that. Left as a documented dead end
+rather than reported as a second confirmation it cannot honestly be.
+
+Related, and now also confirmed on real data rather than only synthetic: within
+the gapped family the E-value carries almost no information about correctness —
+rank-1-gapped accuracy sits at roughly 19-30% regardless of penalty, in the same
+range synthetic data found (15-20%). Pushing the family down helps; ordering
+*inside* it does not seem to.
 
 ## Gap-crossing extension — MEASURED, rejected
 

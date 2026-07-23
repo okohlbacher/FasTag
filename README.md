@@ -266,9 +266,6 @@ without filtering anything out:
 
 ## Known limitations
 
-- **`-gap_penalty`'s default is calibrated, not derived**, from synthetic
-  spectra this project wrote to test itself. Real ground truth would settle it
-  — [doc/BACKLOG.md](doc/BACKLOG.md).
 - **Defaults are conservative.** `-deisotope`, `-gaps` and `-peaks_per_window`
   are all off; their measured gains come from one acquisition type each.
 - **No modification support.** Residues are the unmodified 19, so labelled
