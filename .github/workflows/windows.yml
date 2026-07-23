@@ -4,10 +4,13 @@ name: windows
 #
 # There is no OpenMS conda package for Windows and the official installer
 # carries no SDK, so OpenMS is built from source: contrib (Boost, Xerces, etc.)
-# then OpenMS itself. That is a different order of magnitude from the
-# minutes-long conda path the other four platforms use -- ~100 minutes on a
-# cold cache (contrib 37 min, OpenMS 63 min, both measured directly), a few
-# minutes once both are cached. Proven end to end: configure, build, ctest and
+# then OpenMS itself. ~100 minutes on a cold cache (contrib 37 min, OpenMS
+# 63 min, both measured directly), a few minutes once both are cached.
+#
+# The other four platforms now build OpenMS from source too (ci.yml), since
+# shipping mzPeak means patching OpenMS and no packaged build carries it.
+# Windows stays in its own workflow because it ALSO needs contrib, which none
+# of the others do -- the split is no longer about conda-vs-source. Proven end to end: configure, build, ctest and
 # the smoke test all pass. Kept in its own workflow rather than folded into
 # build.yml's matrix because of that cost difference, not because it is in
 # doubt -- both jobs gate the same as everywhere else (no continue-on-error),
@@ -51,7 +54,22 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  OPENMS_TAG: release/3.5.0
+  # The patched OpenMS that gives FasTag mzPeak read/write -- same two pins as
+  # ci.yml, and they must stay in lockstep with it: a release whose Windows
+  # binary was built from a different OpenMS than the other four is worse than
+  # one that simply lacks the feature.
+  #
+  # This replaces the old `OPENMS_TAG: release/3.5.0`. mzPeak does not exist on
+  # 3.5.0 -- OpenMS-mzPeakRW is written against a commit on
+  # feature/dia-pseudospectra -- so shipping the format means moving the base
+  # off the release tag. NOTE the knock-on risk: CONTRIB_REV below was read out
+  # of release/3.5.0's submodule pointer, so it is no longer guaranteed to be
+  # the contrib this base expects. Kept because contrib moves rarely and a
+  # mismatch is more likely to be visible as a build failure than as silent
+  # wrongness -- but it is the first thing to suspect if this job breaks in a
+  # way ci.yml does not.
+  OPENMS_BASE_SHA: bd4b89555629d68b431b189a4c841efbcc4dfeea
+  MZPEAK_REF: f9c8a72a74ed3418d67eac9d01a1c28f59365cc8
   # The contrib commit release/3.5.0 pins as a submodule, read directly out of
   # that tag rather than assumed: `git ls-tree release/3.5.0 -- contrib` in a
   # local OpenMS checkout. Using this exact commit rather than contrib's own
@@ -82,8 +100,43 @@ jobs:
         with:
           arch: amd64
 
-      - name: Check out OpenMS
-        run: git clone --depth 1 --branch $env:OPENMS_TAG https://github.com/OpenMS/OpenMS.git openms-src
+      - name: Check out OpenMS at the pinned base commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q openms-src
+          cd openms-src
+          git remote add origin https://github.com/OpenMS/OpenMS.git
+          # A bare `git fetch origin <sha>` is refused ("couldn't find remote
+          # ref") -- GitHub only serves advertised refs. The commit is an
+          # ancestor of feature/dia-pseudospectra, so fetch that tip shallow
+          # and deepen until it is present.
+          git fetch --depth 1 origin feature/dia-pseudospectra
+          for _ in 1 2 3 4 5; do
+            if git cat-file -e "$OPENMS_BASE_SHA^{commit}" 2>/dev/null; then break; fi
+            git fetch -q --deepen=200 origin feature/dia-pseudospectra
+          done
+          git cat-file -e "$OPENMS_BASE_SHA^{commit}"
+          git checkout -q "$OPENMS_BASE_SHA"
+
+      - name: Overlay mzPeak support
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q https://github.com/okohlbacher/OpenMS-mzPeakRW.git mzpeak-rw
+          git -C mzpeak-rw checkout -q "$MZPEAK_REF"
+          # Fail loudly on an unexpected layout rather than silently building a
+          # stock OpenMS and shipping a Windows binary with no mzPeak while the
+          # other four platforms have it.
+          test -f mzpeak-rw/src/openms/source/FORMAT/MzPeakFile.cpp
+          test -f mzpeak-rw/src/openms/include/OpenMS/FORMAT/MzPeakFile.h
+          ( cd mzpeak-rw && git ls-files -z 'src/*' ) \
+            | while IFS= read -r -d '' f; do
+                mkdir -p "openms-src/$(dirname "$f")"
+                cp "mzpeak-rw/$f" "openms-src/$f"
+              done
+          grep -q MZPEAK openms-src/src/openms/include/OpenMS/FORMAT/FileTypes.h
+          grep -q MzPeakFile.h openms-src/src/openms/include/OpenMS/FORMAT/sources.cmake
 
       - name: Check out contrib at the pinned commit
         run: |
@@ -140,7 +193,7 @@ jobs:
       - name: Configure conda packages and paths
         shell: bash -el {0}
         run: |
-          conda install -c conda-forge libarrow libparquet libzip -y
+          conda install -c conda-forge libarrow libparquet libzip nlohmann_json -y
           CONDA_ENV_PREFIX=$(conda info --json | python -c "import json,sys;print(json.load(sys.stdin)['active_prefix'])" | sed 's|\\|/|g')
           echo "CONDA_LIB_PREFIX=$CONDA_ENV_PREFIX/Library" >> "$GITHUB_ENV"
 
@@ -171,7 +224,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: openms-install
-          key: windows-x64-openms-${{ env.OPENMS_TAG }}-${{ env.CONTRIB_REV }}-v1
+          key: windows-x64-openms-${{ env.OPENMS_BASE_SHA }}-${{ env.MZPEAK_REF }}-${{ env.CONTRIB_REV }}-v1
 
       - name: Configure OpenMS
         if: steps.cache-openms.outputs.cache-hit != 'true'
@@ -209,7 +262,7 @@ jobs:
           cmake --build openms-build --parallel
           cmake --build openms-build --target install
 
-      - name: Verify OpenMS ships development files
+      - name: Verify OpenMS ships development files and mzPeak
         shell: bash
         run: |
           CFG=$(find openms-install -name 'OpenMSConfig.cmake' 2>/dev/null | head -1)
@@ -218,6 +271,18 @@ jobs:
             exit 1
           fi
           echo "found: $CFG"
+          # MzPeakFile.h specifically, because it was in no CMake list at all
+          # at first: it compiled and installed cleanly while leaving every
+          # downstream consumer without the class, so FasTag would have gone
+          # green here and silently shipped a Windows binary with no mzPeak
+          # (OpenMS-mzPeakRW PR #1). The other four platforms check the same.
+          HDR=$(find openms-install -name 'MzPeakFile.h' 2>/dev/null | head -1)
+          if [ -z "$HDR" ]; then
+            echo "::error::patched OpenMS installed without MzPeakFile.h -- mzPeak would be silently missing."
+            exit 1
+          fi
+          echo "found: $HDR"
+          grep -q "void store(" "$HDR"
 
   # ----------------------------------------------------------------- FasTag
   #
@@ -275,7 +340,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: openms-install
-          key: windows-x64-openms-${{ env.OPENMS_TAG }}-${{ env.CONTRIB_REV }}-v1
+          key: windows-x64-openms-${{ env.OPENMS_BASE_SHA }}-${{ env.MZPEAK_REF }}-${{ env.CONTRIB_REV }}-v1
 
       - name: Install Eigen and Ninja
         run: choco install -y --no-progress eigen ninja
@@ -299,7 +364,7 @@ jobs:
       - name: Configure conda packages and paths
         shell: bash -el {0}
         run: |
-          conda install -c conda-forge libarrow libparquet libzip -y
+          conda install -c conda-forge libarrow libparquet libzip nlohmann_json -y
           CONDA_ENV_PREFIX=$(conda info --json | python -c "import json,sys;print(json.load(sys.stdin)['active_prefix'])" | sed 's|\\|/|g')
           echo "CONDA_LIB_PREFIX=$CONDA_ENV_PREFIX/Library" >> "$GITHUB_ENV"
 
