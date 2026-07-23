@@ -698,7 +698,32 @@ jobs:
             exit 1
           fi
           echo "$OUT" | grep -q "File not found" || { echo "::error::Unexpected output -- never reached the expected 'file not found' error."; exit 1; }
-          echo "Portability check passed: runs standalone, no build-environment leakage."
+
+          # And that the SHIPPED artifact still has mzPeak. Everything above
+          # only exercises mzML, so a bundle whose mzPeak support quietly
+          # vanished -- a stray OpenMS, a header that stopped installing, a
+          # missing Arrow -- would sail through it. Both of the upstream bugs
+          # this feature hit presented exactly that way: a green build that
+          # shipped without the format.
+          #
+          # A build WITHOUT mzPeak rejects the extension at parameter
+          # validation ("invalid file extension"), because setValidFormats_
+          # never listed it; a build WITH it accepts the name and fails on the
+          # missing file instead. So reaching "File not found" here is the
+          # assertion.
+          OUT2=$(cd /tmp && "$GITHUB_WORKSPACE/dist/FasTag/FasTag" -in nonexistent.mzpeak -out /tmp/mzpeak-check.tsv 2>&1) || true
+          echo "$OUT2"
+          echo "$OUT2" | grep -q "File not found" || {
+            echo "::error::Shipped bundle does not accept .mzpeak -- mzPeak support is missing from the release artifact."
+            exit 1
+          }
+
+          # The Arrow/Parquet stack has to have travelled with it, since that
+          # is what actually reads the format once a real file is given.
+          ls dist/FasTag/lib | grep -qi 'arrow' || { echo "::error::no Arrow library in the bundle"; exit 1; }
+          ls dist/FasTag/lib | grep -qi 'parquet' || { echo "::error::no Parquet library in the bundle"; exit 1; }
+
+          echo "Portability check passed: runs standalone, no build-environment leakage, mzPeak present."
 
       # ---------------------------------------------------------------------
       # macOS code signing + notarization, release builds only.

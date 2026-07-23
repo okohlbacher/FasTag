@@ -197,16 +197,25 @@ jobs:
           python-version: '3.11'
           use-mamba: true
 
-      # libxml2 is not decoration: OpenMS makes it REQUIRED the moment
-      # ArrowDataset is found ("Arrow Dataset (static) may pull in libxml2
-      # symbols; link explicitly"), and finding ArrowDataset is exactly what
-      # adding libarrow-dataset above does. Linux and macOS never hit this --
-      # their conda envs already carry libxml2 transitively -- so it is a
-      # Windows-only consequence of the same package list.
+      # NO libarrow-dataset / libarrow-acero here, unlike ci.yml.
+      #
+      # OpenMS makes LibXml2 REQUIRED the moment ArrowDataset is found ("Arrow
+      # Dataset (static) may pull in libxml2 symbols; link explicitly"). On
+      # Linux and macOS that is free -- their conda envs carry libxml2
+      # transitively. On Windows it is not: adding conda's libxml2 did NOT
+      # satisfy CMake's FindLibXml2, which wants a layout conda-forge's MSVC
+      # build does not present, and configure kept failing with
+      # "Could NOT find LibXml2 (missing: LIBXML2_LIBRARY LIBXML2_INCLUDE_DIR)".
+      #
+      # Dropping the dataset/acero components removes the requirement at its
+      # source rather than fighting the find module: find_package(ArrowDataset)
+      # is QUIET/optional, nothing here uses Arrow Dataset, and MzPeakFile
+      # includes only arrow/api.h, arrow/io/api.h and parquet/arrow/{reader,
+      # writer}.h. The asymmetry with ci.yml is deliberate and costs nothing.
       - name: Configure conda packages and paths
         shell: bash -el {0}
         run: |
-          conda install -c conda-forge 'libarrow>=23' libparquet libarrow-dataset libarrow-acero libzip nlohmann_json libxml2 -y
+          conda install -c conda-forge 'libarrow>=23' libparquet libzip nlohmann_json -y
           CONDA_ENV_PREFIX=$(conda info --json | python -c "import json,sys;print(json.load(sys.stdin)['active_prefix'])" | sed 's|\\|/|g')
           echo "CONDA_LIB_PREFIX=$CONDA_ENV_PREFIX/Library" >> "$GITHUB_ENV"
 
@@ -264,8 +273,6 @@ jobs:
             -DARROW_USE_STATIC=OFF \
             -DArrow_DIR="$CONDA_LIB_PREFIX/lib/cmake/Arrow" \
             -DParquet_DIR="$CONDA_LIB_PREFIX/lib/cmake/Parquet" \
-            -DArrowDataset_DIR="$CONDA_LIB_PREFIX/lib/cmake/ArrowDataset" \
-            -DArrowAcero_DIR="$CONDA_LIB_PREFIX/lib/cmake/ArrowAcero" \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/openms-install"
 
       - name: Build and install OpenMS
@@ -382,7 +389,7 @@ jobs:
       - name: Configure conda packages and paths
         shell: bash -el {0}
         run: |
-          conda install -c conda-forge libarrow libparquet libzip nlohmann_json -y
+          conda install -c conda-forge 'libarrow>=23' libparquet libzip nlohmann_json -y
           CONDA_ENV_PREFIX=$(conda info --json | python -c "import json,sys;print(json.load(sys.stdin)['active_prefix'])" | sed 's|\\|/|g')
           echo "CONDA_LIB_PREFIX=$CONDA_ENV_PREFIX/Library" >> "$GITHUB_ENV"
 
