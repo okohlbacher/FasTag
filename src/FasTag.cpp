@@ -188,15 +188,16 @@ protected:
     registerStringOption_("fragment_tolerance_unit", "<unit>", "ppm", "Tolerance unit", false);
     setValidStrings_("fragment_tolerance_unit", ListUtils::create<String>("ppm,Da"));
 
-    registerIntOption_("max_peaks", "<n>", 100,
+    registerIntOption_("max_peaks", "<n>", 400,
                        "Peaks retained per spectrum; 0 uses the internal ceiling "
                        "of 1024, not unlimited -- the scoring tables are built to "
-                       "that bound", false);
+                       "that bound. The ceiling for 'peaks_per_window'", false);
     setMinInt_("max_peaks", 0);
-    registerIntOption_("peaks_per_window", "<n>", 0,
+    registerIntOption_("peaks_per_window", "<n>", 10,
                        "Keep this many peaks per 100 Da window instead of the "
                        "strongest 'max_peaks' overall; 0 disables. Scales the "
-                       "effective peak budget with the spectrum's m/z range", false);
+                       "effective peak budget with the spectrum's m/z range, so "
+                       "dense spectra are not starved and sparse ones not padded", false);
     setMinInt_("peaks_per_window", 0);
     registerIntOption_("max_tags", "<n>", 50, "Tags reported per spectrum; 0 = unlimited", false);
     setMinInt_("max_tags", 0);

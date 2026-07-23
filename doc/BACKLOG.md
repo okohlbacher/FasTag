@@ -154,10 +154,53 @@ implemented. Its motivation was reducing redundancy between the two families,
 which `-gap_penalty` now addresses more directly by separating them in the
 ranking. Reconsider only if redundancy is shown to cost something measurable.
 
-## Peak-cap defaults — sweep DONE, default deliberately unchanged
+## Peak-cap defaults — CHANGED to `-peaks_per_window 10 -max_peaks 400`, validated on real data
 
-The sweep this entry asked for has been run across all four acquisition classes
-(`bench/benchmark.cpp`, TL=4, gaps on).
+The default is now `-peaks_per_window 10 -max_peaks 400` (was `0` / `100`). The
+synthetic sweep below recommended it; a real search then confirmed the flat-cap
+increase this entry originally suspected of helping does **not** help real data,
+while the per-window quota does.
+
+### Real ground truth (PXD000001, added later)
+
+The synthetic sweep could not be trusted alone (see the original decision at the
+bottom). Rerun against real PSMs — [PXD000001](https://www.ebi.ac.uk/pride/archive/projects/PXD000001),
+the same Mascot-searched Erwinia TMT dataset that settled `-gap_penalty`,
+2,254 PSMs at 1% target-decoy FDR, `TL=4 -gaps 1`, scored against the identified
+peptides with the search's fixed mods (TMT6plex N-term/K, Methylthio C):
+
+| setting | wall | rank-1 | top-5 | total |
+|---|---|---|---|---|
+| cap 50 | 3.5 s | 81.9 | 92.8 | 95.8 |
+| cap 100 (old default) | 10.4 s | 86.4 | 96.1 | 98.0 |
+| cap 200 | 36.6 s | 86.3 | 96.5 | 98.2 |
+| cap 400 | 64.0 s | 86.0 | 96.4 | 98.3 |
+| cap 800 | 97.7 s | 86.0 | 96.4 | 98.3 |
+| **ppw 10 / cap 400 (new default)** | **14.1 s** | **87.0** | 96.0 | 98.0 |
+| ppw 15 / cap 800 | 42.0 s | 87.0 | 96.3 | 98.1 |
+
+Two things the real data settles that the synthetic could not:
+
+1. **A flat cap increase is counterproductive here.** 100 → 800 leaves rank-1
+   flat-to-worse (86.4 → 86.0) for +0.3 pp total recall at ~10x the runtime. This
+   dataset (LTQ Orbitrap Velos, older TMT) simply is not dense enough to be
+   starved the way the synthetic Astral profile is — so a naive "raise max_peaks"
+   would have slowed every run for nothing.
+2. **The per-window quota is the setting that helps.** `-peaks_per_window 10`
+   lifts rank-1 +0.6 pp (86.4 → 87.0) at only 1.35x the time, because it keeps
+   the strongest peaks *per m/z window* rather than the strongest overall.
+
+The gain on this one (non-dense) dataset is small; the large gains remain
+synthetic (dense Astral, below). But the direction now agrees across synthetic
+and real — ppw helps, flat cap does not — and the cost is modest, so the change
+is made rather than deferred. **Honest caveat**: one real dataset, and not a
+dense one; the strong dense-instrument gain is still synthetic-only, since no
+dense real ground truth is on this machine. Revert with
+`-peaks_per_window 0 -max_peaks 100` for the old speed.
+
+### The synthetic sweep (what recommended it)
+
+Run across all four acquisition classes (`bench/benchmark.cpp`, TL=4, gaps on).
 
 **The flat 100-peak cap is strongly dataset-dependent — the defect suspected here
 is real, and larger than expected.** rank-1 / total recall:
@@ -192,22 +235,15 @@ It is not free. Real-file wall time, 8 threads:
 | ppw 10 / cap 400 | 20.3 s | 44.0 s |
 | ppw 15 / cap 800 | 27.7 s | 49.6 s |
 
-### Decision: default unchanged, pending real ground truth
+### Original decision (superseded): default unchanged, pending real ground truth
 
-Deliberate, and the conservative call. Every number above comes from spectra this
-project generated to test itself; none is a measurement on real data with real
-identifications. Changing a released tool's output and doubling its runtime is
-not something synthetic evidence should decide, however consistent it is.
+Kept for the record. The call at the time was conservative — every number in the
+synthetic tables comes from spectra this project generated to test itself, and
+changing a released tool's output and runtime is not something synthetic evidence
+should decide alone. That prerequisite (real ground truth) has since been met via
+PXD000001 above, which is why the default was changed. The synthetic
+recommendation it named — `-peaks_per_window 10 -max_peaks 400` — is exactly what
+the real data confirmed, so it is now the default rather than a suggestion.
 
-**Prerequisite to revisiting**: regenerate the Sage ground truth. That needs Sage
-0.14.7, a human FASTA with reversed decoys, the S23 diaTracer file, and the
-precursor-injection fix in `vault/03-Design/SAGE-Tag-Confirmation.md` (Sage
-otherwise panics with `missing MS1 precursor for frame=1`, because diaTracer
-writes precursor m/z only on the isolation window). None of it is currently on
-this machine — see `TEST-DATA.md`. Rerun the two tables above against PSMs and
-the decision makes itself.
-
-**Recommendation when that happens**: `-peaks_per_window 10 -max_peaks 400`. Most
-of the available gain, at the knee of the time curve, and its worst case across
-the four classes still beats today's default. Users who know their data is dense
-can pass it today.
+The Sage ground truth this entry originally waited for is still gone (see
+`TEST-DATA.md`); PXD000001 stood in for it, as it did for `-gap_penalty`.

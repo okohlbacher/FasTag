@@ -178,8 +178,8 @@ relative to RAM; see [doc/BACKLOG-mzpeak.md](doc/BACKLOG-mzpeak.md).
 | `-deisotope` | off | Collapse isotope clusters to their monoisotopic peak and move multiply-charged fragments onto the singly-charged scale before peak selection |
 | `-fragment_tolerance <value>` | 20 | Fragment mass tolerance |
 | `-fragment_tolerance_unit <ppm\|Da>` | ppm | Tolerance unit |
-| `-max_peaks <n>` | 100 | Peaks retained per spectrum; 0 uses the internal ceiling of 1024, not unlimited |
-| `-peaks_per_window <n>` | 0 | Keep this many peaks per 100 Da window instead of the strongest `-max_peaks` overall; 0 disables |
+| `-max_peaks <n>` | 400 | Peaks retained per spectrum; 0 uses the internal ceiling of 1024, not unlimited. The ceiling for `-peaks_per_window` |
+| `-peaks_per_window <n>` | 10 | Keep this many peaks per 100 Da window instead of the strongest `-max_peaks` overall; 0 disables |
 | `-max_tags <n>` | 50 | Tags reported per spectrum; 0 = unlimited |
 | `-max_evalue <value>` | 20 | E-value cutoff; 0 disables |
 | `-gap_penalty <value>` | 100 | Rank gapped tags as if their E-value were this many times worse. Affects order only, never which tags are reported — gapped tags are otherwise heavily over-ranked (~95% of top-1 slots while ~3.6x less likely to be correct). 1 disables |
@@ -278,8 +278,11 @@ without filtering anything out:
 
 ## Known limitations
 
-- **Defaults are conservative.** `-deisotope`, `-gaps` and `-peaks_per_window`
-  are all off; their measured gains come from one acquisition type each.
+- **Some defaults are conservative.** `-deisotope` and `-gaps` are off. The peak
+  budget defaults to `-peaks_per_window 10 -max_peaks 400`, validated on real
+  ground truth (PXD000001) as neutral-to-positive versus the old flat 100-peak
+  cap at ~1.35x the runtime; revert with `-peaks_per_window 0 -max_peaks 100`
+  for the old speed. See [doc/BACKLOG.md](doc/BACKLOG.md).
 - **No modification support.** Residues are the unmodified 19, so labelled
   samples (TMT and similar) will not match tags spanning a modified residue.
 - **mzPeak is not memory-bounded on read** (see above), an upstream property of `MzPeakFile::transform()` rather than of FasTag.
