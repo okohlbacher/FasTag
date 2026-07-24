@@ -228,7 +228,7 @@ Candidate features, with verdicts (ADOPT / MAYBE / SKIP):
 | F3 | Gap tags (mass-gap residues) | noisy/ion-starved spectra | **DONE** — `-gaps`, capped at 1; over-ranking fixed and validated on real data (`-gap_penalty`) |
 | F4 | **Calibrated tag confidence / per-residue FDR** | rescoring, taxonomy, variant QC | PARTLY DONE — E-value validated + per-residue `min_conf`/`mean_conf` shipped; true decoy q-value is research-grade (see below) |
 | F5 | Mass-shift localization (shifted-fragment method) | open PTM; the mod-localization roadmap | ADOPT for localization; interoperate with PTM-Shepherd, don't reimplement |
-| F6 | Multi-length tags as a recall/specificity knob | DB search, HLA, taxonomy | ADOPT — but default recall-y (short); long tags opt-in |
+| F6 | Multi-length tags as a recall/specificity knob | DB search, HLA, taxonomy | **DONE via -extension** — a seed of length L with -extension N emits the short seed (recall, extended=0) AND its extensions up to L+2N (specificity, extended=1) in one run, each scored against its OWN length null (mean E-value falls monotonically with length; verified). The `length`/`extended` columns let a consumer pick. Default is recall-y (short seed, extension 0); long tags are opt-in via -extension. |
 | F7 | Tag-agreement features for MS2Rescore/Oktoberfest | rescoring (+10-30% IDs) | **PARTLY DONE** — `tagfeatures` emits per-spectrum aggregates (1 row/spectrum, verified 2871/2871). Not yet validated as a rescoring gain against a real MS2Rescore run |
 | F8 | **Native tag→taxonomic/species detector** | metaproteomics | **DONE** — `-species` (off by default), bundled taxonomy resolved beside the binary, ranked-taxa TSV, and a GUI Species tab. Validated: Homo #1 on a human CPTAC sample with Bos/Sus/Oryctolagus as the expected reagent contaminants |
 | F9 | Single-substitution (mutation) tags | proteogenomics | MAYBE→ADOPT — nearly free once F1 exists; emit as flagged *unvalidated* variants only |
@@ -360,8 +360,9 @@ research project.
   the old 17-taxon set only looked sharper because the competitors were absent.
 
 ### Still open (unchanged from v0.16.0)
-- F13 ProForma / mzTab / mzIdentML output; F6 multi-length tags; GUI P2-P6;
-  release signing (awaits secrets); F4 calibrated q-value (research).
+- F13: ProForma column shipped (-proforma); mzTab / mzIdentML / USI still open.
+- F6 multi-length tags: DONE via -extension (see the F-table).
+- GUI P2-P6; release signing (awaits secrets); F4 calibrated q-value (research).
 - 1(b) embed-the-index-in-every-tarball is NOT done: the index ships as a single
   shared asset instead. Full per-tarball embedding needs a build-once/download
   CI job; deferred as too risky to land unattended, tracked here.
