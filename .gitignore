@@ -10,3 +10,6 @@ build-inst/
 build-f4/
 build-main/
 build-rel/
+
+# local dev symlinks to a taxonomy index (see data/taxonomy/README.md)
+/share/

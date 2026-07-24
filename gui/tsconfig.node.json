@@ -7,7 +7,16 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node", "electron-vite/node"]
+    "types": [
+      "node",
+      "electron-vite/node"
+    ],
+    "resolveJsonModule": true
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "electron.vite.config.ts"]
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*",
+    "electron.vite.config.ts",
+    "src/common/**/*"
+  ]
 }

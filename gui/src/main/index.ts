@@ -1,7 +1,8 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'node:path'
-import { probeBinary, runFastag, cancelRun, RunHandle, RunParams } from './fastag'
+import { probeBinary, resolveBinary, runFastag, cancelRun, RunHandle, RunParams } from './fastag'
 import { previewTsv } from './preview'
+import { readSpecies, readTaxdbInfo, bundledTaxdb } from './species'
 
 // One in-flight run for the P0/P1 skeleton (batch queue comes later).
 let currentRun: RunHandle | null = null
@@ -89,6 +90,25 @@ ipcMain.handle('fastag:cancel', () => {
 })
 
 ipcMain.handle('fastag:preview', (_e, path: string, maxRows?: number) => previewTsv(path, maxRows))
+
+ipcMain.handle('fastag:species', (_e, path: string) => readSpecies(path))
+
+// k of the index a run would load, so the UI can warn before the run rather
+// than after a ~2 GB load produces an empty report.
+ipcMain.handle('fastag:taxdbInfo', (_e, explicit?: string) => {
+  const p = explicit && explicit.trim() !== '' ? explicit : bundledTaxdb(resolveBinary().bin)
+  return p ? readTaxdbInfo(p) : null
+})
+
+// Open the NCBI Taxonomy page for a taxid. Built here from a fixed template --
+// the renderer passes a number, never a URL, so a crafted value cannot redirect
+// the user somewhere else.
+ipcMain.handle('fastag:openTaxon', (_e, taxid: number) => {
+  const id = Number(taxid)
+  if (!Number.isInteger(id) || id <= 0) return false
+  shell.openExternal(`https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=${id}`)
+  return true
+})
 
 // ---- lifecycle ------------------------------------------------------------
 

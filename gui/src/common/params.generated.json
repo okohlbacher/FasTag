@@ -1,0 +1,334 @@
+{
+  "params": [
+    {
+      "name": "debug",
+      "type": "int",
+      "default": "0",
+      "description": "Sets the debug level",
+      "required": false,
+      "toppAdvanced": true
+    },
+    {
+      "name": "deisotope",
+      "type": "bool",
+      "default": "false",
+      "description": "Collapse isotope clusters to their monoisotopic peak and move multiply-charged fragments onto the singly-charged scale before peak selection",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "extension",
+      "type": "int",
+      "default": "0",
+      "description": "Maximum residues appended per terminus; 0 disables extension",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0,
+      "max": 12
+    },
+    {
+      "name": "fasta",
+      "type": "input-file",
+      "default": "",
+      "description": "Report only tags occurring in these sequences",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "fixed_modifications",
+      "type": "string-list",
+      "default": [
+        "Carbamidomethyl (C)"
+      ],
+      "description": "Fixed modifications by OpenMS/UniMod name, e.g. 'Carbamidomethyl (C)' 'TMT6plex (K)'. Shift residue masses; not annotated in the tag",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "force",
+      "type": "bool",
+      "default": "false",
+      "description": "Overrides tool-specific checks",
+      "required": false,
+      "toppAdvanced": true
+    },
+    {
+      "name": "fragment_tolerance",
+      "type": "double",
+      "default": "20.0",
+      "description": "Fragment mass tolerance",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 1e-9
+    },
+    {
+      "name": "fragment_tolerance_unit",
+      "type": "string",
+      "default": "ppm",
+      "description": "Tolerance unit",
+      "required": false,
+      "toppAdvanced": false,
+      "choices": [
+        "ppm",
+        "Da"
+      ]
+    },
+    {
+      "name": "gap_penalty",
+      "type": "double",
+      "default": "100.0",
+      "description": "Rank gapped tags as if their E-value were this many times worse. Affects ORDER only, never which tags are reported. 1 disables. Gapped tags are otherwise heavily over-ranked: they take ~95% of top-1 slots while being ~3.6x less likely to be correct",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 1
+    },
+    {
+      "name": "gaps",
+      "type": "int",
+      "default": "0",
+      "description": "Allow a tag to cross one missing peak, spelling the two residues either side of it from their summed mass; 0 disables",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "name": "in",
+      "type": "input-file",
+      "default": "",
+      "description": "Input spectra",
+      "required": true,
+      "toppAdvanced": false
+    },
+    {
+      "name": "isobaric_tolerance",
+      "type": "double",
+      "default": "0.04",
+      "description": "When matching against 'fasta', treat a residue as interchangeable with an isobaric residue pair within this tolerance; 0 requires exact strings",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "log",
+      "type": "string",
+      "default": "",
+      "description": "Name of log file (created only when specified)",
+      "required": false,
+      "toppAdvanced": true
+    },
+    {
+      "name": "max_evalue",
+      "type": "double",
+      "default": "20.0",
+      "description": "E-value cutoff; 0 disables",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0
+    },
+    {
+      "name": "max_peaks",
+      "type": "int",
+      "default": "400",
+      "description": "Peaks retained per spectrum; 0 uses the internal ceiling of 1024, not unlimited -- the scoring tables are built to that bound. The ceiling for 'peaks_per_window'",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0
+    },
+    {
+      "name": "max_tags",
+      "type": "int",
+      "default": "50",
+      "description": "Tags reported per spectrum; 0 = unlimited",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0
+    },
+    {
+      "name": "min_filter_length",
+      "type": "int",
+      "default": "0",
+      "description": "Ignore tags shorter than this when matching against 'fasta'; 0 derives a floor from the database size",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "no_progress",
+      "type": "bool",
+      "default": "false",
+      "description": "Disables progress logging to command line",
+      "required": false,
+      "toppAdvanced": true
+    },
+    {
+      "name": "orientation",
+      "type": "string",
+      "default": "both",
+      "description": "Match a tag as written, or also reversed. Tags are stored N->C under a y-ion assumption, so b-derived tags read reversed",
+      "required": false,
+      "toppAdvanced": false,
+      "choices": [
+        "both",
+        "forward"
+      ]
+    },
+    {
+      "name": "out",
+      "type": "output-file",
+      "default": "",
+      "description": "Tag list (tab-separated)",
+      "required": true,
+      "toppAdvanced": false
+    },
+    {
+      "name": "out_spectra",
+      "type": "output-file",
+      "default": "",
+      "description": "Write spectra carrying a reported tag here (mzML, or mzpeak if this build has it). Note this path holds one slot per input spectrum, so unlike the default it needs memory proportional to the FILE, not to the thread count",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "peaks_per_window",
+      "type": "int",
+      "default": "10",
+      "description": "Keep this many peaks per 100 Da window instead of the strongest 'max_peaks' overall; 0 disables. Scales the effective peak budget with the spectrum's m/z range, so dense spectra are not starved and sparse ones not padded",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0
+    },
+    {
+      "name": "progress",
+      "type": "bool",
+      "default": "false",
+      "description": "Emit 'FASTAG_PROGRESS done=<n> total=<n>' lines to stderr for a GUI progress bar",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "species",
+      "type": "bool",
+      "default": "false",
+      "description": "Infer which taxa are present from the tags. Uses the bundled taxonomy unless -taxdb/-taxonomy_* are given, and writes <out>.species.tsv unless -species_out is given",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "species_min_len",
+      "type": "int",
+      "default": "0",
+      "description": "Ignore tags shorter than this for taxonomy; 0 uses the index k",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0
+    },
+    {
+      "name": "species_out",
+      "type": "output-file",
+      "default": "",
+      "description": "Ranked taxa TSV. Default: <out> with a .species.tsv suffix",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "species_rank",
+      "type": "string",
+      "default": "genus",
+      "description": "Report taxa at this NCBI rank (genus, family, ...)",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "subsample_fraction",
+      "type": "double",
+      "default": "0.0",
+      "description": "Tag only this random fraction (0..1] of input spectra; 0 = all",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "name": "subsample_seed",
+      "type": "int",
+      "default": "1",
+      "description": "Seed for -subsample_* selection",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0
+    },
+    {
+      "name": "subsample_spectra",
+      "type": "int",
+      "default": "0",
+      "description": "Tag only this many randomly chosen input spectra; 0 = all",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 0
+    },
+    {
+      "name": "tag_length",
+      "type": "int",
+      "default": "3",
+      "description": "Seed tag length in residues",
+      "required": false,
+      "toppAdvanced": false,
+      "min": 1
+    },
+    {
+      "name": "taxdb",
+      "type": "input-file",
+      "default": "",
+      "description": "Tag->taxon index (built by buildtaxdb). Default: the bundled tax_k7.taxdb",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "taxonomy_names",
+      "type": "input-file",
+      "default": "",
+      "description": "NCBI taxonomy names.dmp. Default: the bundled names.dmp",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "taxonomy_nodes",
+      "type": "input-file",
+      "default": "",
+      "description": "NCBI taxonomy nodes.dmp. Default: the bundled nodes.dmp",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "test",
+      "type": "bool",
+      "default": "false",
+      "description": "Enables the test mode (needed for internal use only)",
+      "required": false,
+      "toppAdvanced": true
+    },
+    {
+      "name": "threads",
+      "type": "int",
+      "default": "1",
+      "description": "Sets the number of threads allowed to be used by the TOPP tool (0 = all available cores)",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "variable_modifications",
+      "type": "string-list",
+      "default": [],
+      "description": "Variable modifications by OpenMS/UniMod name, e.g. 'Phospho (S)' 'Phospho (T)' 'Phospho (Y)' 'Formyl (K)'. Add a modified alternative, written inline as X[Name]",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
+      "name": "version",
+      "type": "string",
+      "default": "3.6.0-pre-HEAD-2026-04-24",
+      "description": "Version of the tool that generated this parameters file.",
+      "required": false,
+      "toppAdvanced": true
+    }
+  ]
+}

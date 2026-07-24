@@ -633,6 +633,15 @@ jobs:
           done
 
           cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FasTag/share-OpenMS
+
+          # The taxonomy -species resolves by default. Only the pruned NCBI dumps
+          # (12 KB) go here; the 232 MB k-mer index is platform-independent and
+          # ships once per release as FasTag-taxonomy.tar.gz, rather than five
+          # times inside these tarballs. `share-FasTag-taxonomy` (not
+          # share/FasTag/taxonomy) because this layout is FLAT -- the executable
+          # sits at the root, so there is no ../share to resolve; FasTag looks for
+          # both spellings, see taxonomyDir_() in src/FasTag.cpp.
+          cp -r data/taxonomy dist/FasTag/share-FasTag-taxonomy
           # printf, not a heredoc: a heredoc's body has to be indented to
           # satisfy YAML's block-scalar rules, but leading whitespace before
           # `#!` breaks shebang recognition -- the kernel requires it at byte
@@ -714,6 +723,11 @@ jobs:
             | awk '/LC_RPATH/{g=1;next} g&&/^ *path /{print "  " $2; g=0}'
 
           cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FasTag/share-OpenMS
+
+          # Same taxonomy copy as the Linux step above. It lives in BOTH because
+          # Linux and macOS have separate bundle steps; adding it to only one
+          # shipped two of the four tarballs without it.
+          cp -r data/taxonomy dist/FasTag/share-FasTag-taxonomy
           # printf, not a heredoc: a heredoc's body has to be indented to
           # satisfy YAML's block-scalar rules, but leading whitespace before
           # `#!` breaks shebang recognition -- the kernel requires it at byte

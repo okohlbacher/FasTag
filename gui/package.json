@@ -1,6 +1,6 @@
 {
   "name": "fastag-gui",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Cross-platform desktop GUI for the FasTag mass-spectrometry sequence tagger",
   "author": "Oliver Kohlbacher and contributors",
   "license": "MIT",
@@ -13,7 +13,8 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "pack:dir": "electron-vite build && electron-builder --dir",
-    "dist": "electron-vite build && electron-builder"
+    "dist": "electron-vite build && electron-builder",
+    "params": "node scripts/gen-params.mjs resources/fastag/bin/FasTag > src/common/params.generated.json"
   },
   "dependencies": {
     "electron-updater": "^6.3.9"
@@ -30,5 +31,54 @@
     "@types/node": "^22.10.5",
     "typescript": "^5.7.3",
     "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "de.openms.fastag",
+    "productName": "FasTag",
+    "directories": {
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/fastag",
+        "to": "fastag"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Science",
+      "icon": "build/icon.png"
+    }
   }
 }

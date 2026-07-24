@@ -1,70 +1,27 @@
 # Backlog
 
-## mzPeak input — designed, not built
+## mzPeak input — SHIPPED, and now streaming
 
-**Decision: the consumer + work-queue adapter, when it is built. Not now.**
+Superseded. This section used to argue for deferring mzPeak ("the consumer +
+work-queue adapter, when it is built. Not now") on the grounds that the format
+was pre-1.0 and `MzPeakFile` sat on a feature branch. Both objections were
+overtaken by events: the feature branch absorbed the implementation, and mzPeak
+read/write is now a shipped, CI-gated feature on all five platforms.
 
-FasTag reads and writes mzML only. [mzPeak](https://github.com/OpenMS/mzpeak) is
-a Parquet-backed format whose columnar layout would make the metadata problem
-that forced the OpenMS patch (see `OPENMS-FAST-READER.md`) disappear structurally
-rather than by patching: MS level and precursor live in their own columns and can
-be read without touching peak data.
+What actually landed:
 
-### What already works
+- `-in` accepts `.mzpeak` wherever the linked OpenMS provides `MzPeakFile` plus a
+  `MZPEAK` entry in `FileTypes` (detected at configure time; CI asserts BOTH the
+  configure decision and that the built binary advertises the format, because a
+  silent drop to mzML-only has happened twice).
+- The read path is a `ChunkingConsumer` over `MzPeakFile::transform()`, bounded
+  by PEAKS rather than spectra.
+- `transform()` itself now streams row group by row group upstream — see
+  `BACKLOG-mzpeak.md`. That was the one real obstacle and it is gone: a 42,092
+  MS2-spectrum `.mzpeak` produces 1,130,228 tags at **581 MB peak RSS**, against
+  the ~11x-file-size materialisation it replaced.
 
-`OpenMS::MzPeakFile` (branch `feature/mzpeak-file-handler`) reads and writes the
-fields FasTag needs. Verified in its source, not assumed:
-
-```cpp
-auto charge = ...->GetFieldByName("MS_1000041_charge_state");
-if (charge && !charge->IsNull(r)) { pd.has_charge = true; pd.charge = charge->Value(r); }
-```
-
-An earlier note here claimed charge does not survive mzPeak conversion. That was
-wrong — it was a property of the *files* tested, which came from a converter that
-does not populate the field, not of the format or of OpenMS.
-
-`MzPeakFile` also offers `transform(filename, IMSDataConsumer*)`, so a large file
-need not be resident.
-
-### The one real obstacle
-
-Not I/O — the parallel model. FasTag's OpenMP loop is **pull-based random
-access**: each worker copy-constructs its own reader and calls `getSpectrum(i)`.
-`MzPeakFile` offers **push-based streaming** (`transform` feeds a consumer
-sequentially) or a whole-file `load`. Neither fits directly.
-
-### Chosen approach: consumer + bounded work queue
-
-Write an `IMSDataConsumer` whose `consumeSpectrum()` pushes onto a bounded queue
-that the existing workers drain. Memory stays bounded, no OpenMS change is
-needed, and the tagging code is untouched.
-
-The cost is output ordering. Rows currently come out in spectrum order because
-each worker writes to `rows[i]` under an index it already has; a queue loses that
-index unless it is carried explicitly. Carry it — determinism of the output is
-worth more than the simplicity of a bare queue, and `ctest` asserts it.
-
-Rejected alternatives:
-
-- **`OnDiscMzPeakExperiment`** — mirror `OnDiscMSExperiment`'s random-access API
-  over Parquet row groups. Architecturally the right answer, and FasTag would
-  change by about five lines. But it is an OpenMS contribution of roughly a week,
-  and it belongs upstream where every TOPP tool benefits, not here.
-- **Reading Parquet directly in FasTag** — adds Arrow and Parquet to a tool whose
-  dependency discipline is documented in `BOM.md`, and duplicates what OpenMS
-  already does.
-
-### Why it is deferred
-
-- mzPeak is explicitly pre-1.0: *"no stability is guaranteed at this point. Our
-  current goal is to stabilize the API by the end of the summer (2026)."*
-- `MzPeakFile` is on a feature branch, not OpenMS mainline. Adopting it now would
-  make FasTag depend on two unmerged branches at once.
-
-Revisit when the format stabilises and `MzPeakFile` lands in mainline. The cheap
-first step, whenever that is: round-trip a benchmark mzML through
-`MzPeakFile::store` and back, and confirm precursor m/z and charge survive.
+Remaining mzPeak work is tracked in `BACKLOG-mzpeak.md`, not here.
 
 ## Gapped tags were overranked — FIXED, and now validated on real data
 
@@ -266,14 +223,14 @@ Candidate features, with verdicts (ADOPT / MAYBE / SKIP):
 
 | # | Feature | Driving use | Verdict |
 |---|---|---|---|
-| F1 | Flank-mass reconciliation, delta = mod/mutation | open/blind PTM, variants | ADOPT — this is TagRecon stage A+; validated by PIPI2 (2024), Open-pFind |
+| F1 | Flank-mass reconciliation, delta = mod/mutation | open/blind PTM, variants | **PARTLY DONE** — `TagRecon.cpp` implements stage A + stage B (`interpretDelta_`, mod vs substitution vs unknown). Not yet wired to a DB-scale index (needs F2) |
 | F2 | FM-/substring index for tag→DB lookup | scale of F1 | ADOPT — reuse a succinct-index lib; enabling substrate |
-| F3 | Gap tags (mass-gap residues) | noisy/ion-starved spectra | ADOPT (already have `-gaps`); cap at 1 |
+| F3 | Gap tags (mass-gap residues) | noisy/ion-starved spectra | **DONE** — `-gaps`, capped at 1; over-ranking fixed and validated on real data (`-gap_penalty`) |
 | F4 | **Calibrated tag confidence / per-residue FDR** | rescoring, taxonomy, variant QC | PARTLY DONE — E-value validated + per-residue `min_conf`/`mean_conf` shipped; true decoy q-value is research-grade (see below) |
 | F5 | Mass-shift localization (shifted-fragment method) | open PTM; the mod-localization roadmap | ADOPT for localization; interoperate with PTM-Shepherd, don't reimplement |
 | F6 | Multi-length tags as a recall/specificity knob | DB search, HLA, taxonomy | ADOPT — but default recall-y (short); long tags opt-in |
-| F7 | Tag-agreement features for MS2Rescore/Oktoberfest | rescoring (+10-30% IDs) | ADOPT — cheap, high-ROI, repositions FasTag as a feature source |
-| F8 | **Native tag→taxonomic/species detector** | metaproteomics | ADOPT — most differentiated; no mainstream *tagger* ships this (cf. MegaPX, NovoLign). In progress |
+| F7 | Tag-agreement features for MS2Rescore/Oktoberfest | rescoring (+10-30% IDs) | **PARTLY DONE** — `tagfeatures` emits per-spectrum aggregates (1 row/spectrum, verified 2871/2871). Not yet validated as a rescoring gain against a real MS2Rescore run |
+| F8 | **Native tag→taxonomic/species detector** | metaproteomics | **DONE** — `-species` (off by default), bundled taxonomy resolved beside the binary, ranked-taxa TSV, and a GUI Species tab. Validated: Homo #1 on a human CPTAC sample with Bos/Sus/Oryctolagus as the expected reagent contaminants |
 | F9 | Single-substitution (mutation) tags | proteogenomics | MAYBE→ADOPT — nearly free once F1 exists; emit as flagged *unvalidated* variants only |
 | F10 | Low-latency single-spectrum tagging | real-time / instrument-control search | MAYBE — build the streaming path + benchmark; vendor integration out of scope |
 | F11 | Glyco spectrum flag (oxonium detector) | glycoproteomics | SKIP full glyco; MAYBE the flag only |
@@ -323,3 +280,56 @@ entrapment null, or a reconcile-to-peptide-first target-decoy — tracked, not
 shipped, so no miscalibrated FDR reaches users. The `TagFDR` machinery (an
 empirical target-decoy q-curve) was written and unit-tested but is not wired in
 until a null that calibrates exists.
+
+## Open gaps as of v0.16.0 — triaged, with honest sizes
+
+Written after a pass whose goal was "close all gaps". Everything closable at
+that scale was closed; what remains is listed here with WHY, because an
+undifferentiated to-do list hides the difference between an afternoon and a
+research project.
+
+### Closed in this pass
+
+- mzPeak `transform()` streaming (see above) and the stale sections that still
+  called it unsolved.
+- `-progress`: per-percent AND ≥5 s progress on stderr; the mzPeak path learns
+  its denominator from `setExpectedSize()`, so it is determinate too.
+- `-species` as an explicit switch, with the taxonomy resolved beside the binary
+  and `species_out` defaulting from `-out`. Off by default: enabling it costs
+  ~8 s and ~1.5 GB that a plain tagging run should not pay.
+- Bundled taxonomy in a standard directory, pruned from ~493 MB to 12 KB
+  (byte-identical results, faster load), installed by CMake and copied into every
+  release tarball.
+- A GUI with the full parameter set generated from `-write_ini`, an Advanced
+  accordion, and a Species tab.
+
+### Still open, sized
+
+| item | size | why it is not done |
+|---|---|---|
+| **F2** FM-/substring index for tag→DB lookup | days | Real data structure work. It is the substrate F1 needs to run at database scale; without it F1 is a demo. |
+| **F5** Mass-shift localization | days | Should interoperate with PTM-Shepherd rather than reimplement it; needs a design decision first. |
+| **F6** Multi-length tags in one run | ~1 day | `-tag_length` is single-valued today. Cheap, but changes the output contract, so it wants a deliberate schema choice. |
+| **F13** ProForma / mzTab / mzIdentML / USI output | days each | Unglamorous and force-multiplying; each format is its own spec-conformance job. |
+| **GUI P2–P6** presets, run IDs + `.partial`, batch queue, million-row DuckDB browser, signing/auto-update | 1–2 weeks | Sequenced in `gui/PLAN.md`. The app is P0/P1 — one file at a time, capped preview. |
+| **`OnDiscMzPeakExperiment`** | days, upstream | Would delete FasTag's consumer entirely and unify the two read paths. Belongs in OpenMS, not here. |
+
+### Blocked on someone else
+
+- **`MZPEAK_REF` still points at a fix branch**, not `main`, because `main` of
+  OpenMS-mzPeakRW still carries the three bugs. Unblocks when PR #1 merges.
+- **Release signing** stays inactive: neither `MACOS_CERTIFICATE_BASE64` nor
+  `SIGNPATH_API_TOKEN` exists as a repo secret, so every tag build takes the
+  "not configured" branch. The scaffolding is in place and waits on credentials.
+- **The 232 MB taxonomy index** is not inside the per-platform tarballs. It is
+  platform-independent, so five copies would add ~440 MB per release for
+  identical bytes; it wants to be one shared release asset.
+
+### Not closable by implementing it
+
+- **F4 calibrated per-tag q-value.** Attempted and documented above: a
+  single-spectrum decoy produces an empty null because FasTag's real false tags
+  are chimeric co-isolated reads, not random-peak coincidences. This needs a
+  chimeric-aware or entrapment null — a research result, not an afternoon. The
+  `TagFDR` machinery exists and is unit-tested but stays unwired, deliberately,
+  so no miscalibrated FDR reaches a user.

@@ -717,6 +717,17 @@ jobs:
           fi
           cp -r "$SHARE_DIR" dist/FasTag/share-OpenMS
 
+          # The taxonomy -species resolves by default. Only the pruned NCBI dumps
+          # (12 KB) go here; the 232 MB k-mer index is platform-independent and
+          # ships once per release as FasTag-taxonomy.tar.gz, rather than five
+          # times inside these tarballs. `share-FasTag-taxonomy` (not
+          # share/FasTag/taxonomy) because this layout is FLAT -- the executable
+          # sits at the root, so there is no ../share to resolve; FasTag looks for
+          # both spellings, see taxonomyDir_() in src/FasTag.cpp.
+          # fastag/data, not data: this workflow checks the repo out into fastag/
+          # (`path: fastag` on actions/checkout), unlike ci.yml which uses the root.
+          cp -r fastag/data/taxonomy dist/FasTag/share-FasTag-taxonomy
+
           # A .bat wrapper, not a shell script: this is Windows. The real
           # exe is named FasTag.core.exe (not FasTag.exe) specifically so
           # typing the bare command `FasTag` at a prompt resolves to this

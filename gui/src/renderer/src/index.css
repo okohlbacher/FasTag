@@ -67,13 +67,77 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .path { font-size: 11px; color: var(--muted); word-break: break-all; margin-top: 4px; }
 
-.field select {
+.field select,
+.field textarea {
+  width: 100%;
   padding: 6px 8px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--fg);
   font: inherit;
+}
+.field textarea { resize: vertical; font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; }
+
+header .logo { display: block; flex: 0 0 auto; }
+
+.sep { height: 1px; background: var(--border); margin: 14px 0; }
+
+/* Parameter help: always present but visually subordinate, so a dense form
+   stays readable. The same text is also the field's tooltip. */
+.help {
+  margin: 3px 0 0;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--muted);
+  max-height: 2.7em;
+  overflow: hidden;
+}
+
+.field.check { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; align-items: center; }
+.field.check input { width: auto; }
+.field.check label { margin: 0; }
+.field.check .help { grid-column: 2; }
+
+.row.tight { gap: 6px; align-items: start; }
+.row.tight > input { flex: 1 1 auto; }
+.row.tight > button { flex: 0 0 auto; }
+button.slim { padding: 6px 10px; font-size: 12px; }
+.row.actions { margin-top: 14px; }
+
+/* Advanced accordion */
+.adv { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+button.disclosure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 4px;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+button.disclosure.sub { font-weight: 500; color: var(--fg); font-size: 12.5px; }
+button.disclosure:hover { color: var(--accent); }
+.chev { display: inline-block; transition: transform 0.15s ease; color: var(--muted); }
+.chev.open { transform: rotate(90deg); }
+.count { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--muted); }
+
+.adv-body { padding: 4px 0 0 4px; }
+.group { border-left: 2px solid var(--border); margin: 2px 0; padding-left: 8px; }
+.group-body { padding: 4px 0 8px 2px; }
+
+.warn {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--err);
+  border-radius: 6px;
+  color: var(--err);
+  font-size: 11px;
 }
 
 .progress {
@@ -124,6 +188,90 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   white-space: pre-wrap;
   color: #c8ccd4;
 }
+
+/* Tabs over the result area */
+.tabs { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--border); background: #16181d; }
+.tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 0;
+}
+.tabs button:hover { color: var(--fg); }
+.tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
+.tabs .count {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Species panel */
+.species { padding: 14px 16px; }
+.species .headline { margin-bottom: 12px; }
+.species .call { display: flex; align-items: baseline; gap: 8px; }
+.species .taxon { font-size: 20px; font-weight: 600; }
+.species .rank {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1px 7px;
+}
+.species .sub { margin-top: 3px; font-size: 12px; color: var(--fg); }
+/* The hedge sits WITH the number, not in a footnote -- a genus-level method
+   must not read as a species identification. */
+.species .caveat { margin-top: 2px; font-size: 11px; color: var(--muted); font-style: italic; }
+.species .evidence {
+  margin: 10px 0 12px;
+  padding: 7px 10px;
+  background: var(--panel);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.species .evidence strong { color: var(--fg); }
+
+table.taxa { width: 100%; }
+table.taxa th.num, table.taxa td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.taxa td.dim { color: var(--muted); }
+table.taxa td.bar-cell { position: relative; }
+.minibar {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 14px;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 3px;
+}
+table.taxa td.bar-cell .v { position: relative; }
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+button.link:hover { text-decoration: underline; }
+.flag { margin-left: 5px; color: #e0a33a; cursor: help; }
+.footnote { margin: 12px 0 0; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+.warn.big { margin: 16px; padding: 12px 14px; font-size: 12px; }
+.warn.big p { margin: 6px 0 0; line-height: 1.5; }
+.warn.big code, .empty code { background: var(--panel); padding: 1px 5px; border-radius: 4px; }
 
 .tablewrap { flex: 1; overflow: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 12px; }

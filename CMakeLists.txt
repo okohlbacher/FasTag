@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21 FATAL_ERROR)
-project(FasTag VERSION 0.15.0 LANGUAGES CXX)
+project(FasTag VERSION 0.16.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -145,6 +145,16 @@ if(_fastag_mzpeak)
   target_compile_definitions(FasTag PRIVATE FASTAG_HAVE_MZPEAK)
 endif()
 install(TARGETS FasTag RUNTIME DESTINATION bin)
+
+# The taxonomy -species resolves by default, at <bin>/../share/FasTag/taxonomy.
+#
+# Only the pruned NCBI dumps (12 KB) live here. The k-mer index itself is 232 MB
+# and platform-independent, so it ships once per release as
+# FasTag-taxonomy.tar.gz rather than five times inside the per-platform tarballs
+# -- see the README beside these files. FasTag names the directory it searched
+# when the index is absent, so that is a clear error, never a silent empty report.
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/taxonomy/"
+        DESTINATION share/FasTag/taxonomy)
 
 add_executable(buildtaxdb src/buildtaxdb.cpp)
 target_link_libraries(buildtaxdb PRIVATE fastag_core)

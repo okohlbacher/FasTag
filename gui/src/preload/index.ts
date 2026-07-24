@@ -9,6 +9,9 @@ const api = {
   run: (params: unknown) => ipcRenderer.invoke('fastag:run', params),
   cancel: () => ipcRenderer.invoke('fastag:cancel'),
   preview: (path: string, maxRows?: number) => ipcRenderer.invoke('fastag:preview', path, maxRows),
+  species: (path: string) => ipcRenderer.invoke('fastag:species', path),
+  taxdbInfo: (explicit?: string) => ipcRenderer.invoke('fastag:taxdbInfo', explicit),
+  openTaxon: (taxid: number) => ipcRenderer.invoke('fastag:openTaxon', taxid),
 
   // Streamed events. Return an unsubscribe so the renderer can clean up.
   onLog: (cb: (line: string) => void) => {

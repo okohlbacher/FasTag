@@ -122,7 +122,17 @@ Worth remembering as a class: both failures were *green builds that shipped
 without the feature*, which is why CI now asserts `MzPeakFile.h` is present in
 the installed OpenMS rather than trusting the build to have noticed.
 
-## The problem: transform() is not streaming
+## FIXED: transform() now streams (was: the problem)
+
+**Resolved 2026-07-24.** `MzPeakFile::transform()` reads row group by row group
+and emits as it goes (`PointBatchStream_`), holding back only the trailing rows
+of a spectrum that straddles a row-group boundary so consumers still see whole
+spectra. Both point tables (profile + centroid) are merged in lockstep by
+`spectrum_index`, reproducing the RT order the materialising path produced.
+Filters (MS level, RT, m/z) run through one shared `dispatch` lambda used by both
+paths so they cannot drift. Measured after the fix: a 42,092-MS2 `.mzpeak` peaks
+at **581 MB**. The numbers below are the BEFORE state, kept for the record.
+
 
 | input | size | peak RSS |
 |---|---|---|
@@ -150,9 +160,9 @@ runs.**
 
 ## Next
 
-1. **Make `MzPeakFile::transform()` stream.** An OpenMS-side fix: read row group
-   by row group and emit as it goes, rather than assembling first. This is the
-   whole of the problem and everything else is a workaround.
+1. ~~**Make `MzPeakFile::transform()` stream.**~~ **DONE** — see above. Shipped in
+   okohlbacher/OpenMS-mzPeakRW (rebased onto OpenMS `9cb5f12`), and pinned by
+   `MZPEAK_REF` in both CI workflows.
 2. **`OnDiscMzPeakExperiment`** — random access over Parquet row groups, matching
    `OnDiscMSExperiment`. Would let the mzPeak path use the *same* pull-based loop
    as mzML instead of a separate chunked one, deleting the consumer entirely.

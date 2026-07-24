@@ -33,7 +33,12 @@
 #include <memory>
 #include <algorithm>
 #include <iterator>
+#include <OpenMS/SYSTEM/File.h>
+
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <random>
 #include <set>
 #include <vector>
@@ -46,6 +51,72 @@ static inline int omp_get_thread_num() { return 0; }
 #endif
 
 using namespace OpenMS;
+
+namespace
+{
+  // Deliberately OUTSIDE the FASTAG_HAVE_MZPEAK guard below. -species
+  // works on any build, so a mzPeak-less build must still compile this; it
+  // lived inside the guard briefly and broke every stock-OpenMS build while
+  // CI (which always builds the patched OpenMS) stayed green.
+  /// Directory holding the bundled taxonomy, or "" when there is none.
+  ///
+  /// Resolution order:
+  ///   1. $FASTAG_TAXONOMY_DIR   -- a custom or larger reference set
+  ///   2. <executable dir>/../share/FasTag/taxonomy   -- the release layout
+  ///
+  /// Deliberately anchored to the EXECUTABLE, not OPENMS_DATA_PATH: this is
+  /// FasTag's own data, and a user pointing OPENMS_DATA_PATH at a system OpenMS
+  /// installation must not silently lose the taxonomy that shipped beside the
+  /// binary they are running.
+  /// k of a taxonomy index, read from its 16-byte header alone.
+  ///
+  /// Exists so the tag-length precondition can be checked BEFORE tagging.
+  /// Loading the index to learn k costs seconds and ~2 GB, which is exactly the
+  /// work we want to refuse to waste.
+  /// Layout (TaxIndex::save): "FTXI" | uint32 version | uint32 k | uint64 n.
+  int peekTaxdbK_(const String& path)
+  {
+    std::ifstream f(path.c_str(), std::ios::binary);
+    if (!f) return -1;
+    char magic[4];
+    if (!f.read(magic, 4) || std::memcmp(magic, "FTXI", 4) != 0) return -1;
+    std::uint32_t ver = 0, k = 0;
+    if (!f.read(reinterpret_cast<char*>(&ver), 4) || ver != 1) return -1;
+    if (!f.read(reinterpret_cast<char*>(&k), 4)) return -1;
+    return static_cast<int>(k);
+  }
+
+  String taxonomyDir_()
+  {
+    const char* env = std::getenv("FASTAG_TAXONOMY_DIR");
+    if (env != nullptr && *env != '\0' && File::isDirectory(String(env))) return String(env);
+
+    // Two layouts, because the project ships both:
+    //   ../share/FasTag/taxonomy   a normal `cmake --install` tree (bin/ + share/)
+    //   ./share-FasTag-taxonomy    the release tarball, which is flat: the
+    //                              executable sits at the root next to lib/ and
+    //                              share-OpenMS/, so there is no ../share to find.
+    // Checking only the first would leave -species broken in every release while
+    // working perfectly from a local install -- the worst way to get this wrong.
+    // A directory only counts if it actually HOLDS the taxonomy. Accepting the
+    // first that merely exists meant an empty ../share/FasTag/taxonomy masked a
+    // complete share-FasTag-taxonomy beside it -- exactly the layout a release
+    // has if the index was never installed.
+    const String exe = File::getExecutablePath();
+    String first_existing;
+    for (const String& cand : {exe + "../share/FasTag/taxonomy",
+                               exe + "share-FasTag-taxonomy",
+                               exe + "taxonomy"})
+    {
+      if (!File::isDirectory(cand)) continue;
+      if (first_existing.empty()) first_existing = cand;
+      if (File::exists(cand + "/nodes.dmp") && File::exists(cand + "/names.dmp")) return cand;
+    }
+    // Fall back to one that exists but is incomplete, so the error names a real
+    // path the user can inspect rather than reporting "nothing found anywhere".
+    return first_existing;
+  }
+}
 
 //-------------------------------------------------------------------------
 /**
@@ -99,8 +170,22 @@ namespace
       : flush_(std::move(flush)), budget_(peak_budget),
         keep_(keep_fraction), rng_(seed) {}
 
+    /// Progress hooks. @p tick is called once per spectrum OFFERED (before any
+    /// filtering), and @p on_size once with the run's spectrum count, so the two
+    /// share a denominator and a determinate percentage is possible. Optional:
+    /// without them the consumer behaves exactly as before.
+    void setProgressHooks(std::function<void()> tick, std::function<void(Size)> on_size)
+    {
+      tick_ = std::move(tick);
+      on_size_ = std::move(on_size);
+    }
+
     void consumeSpectrum(SpectrumType& s) override
     {
+      // Counted before the filters below: progress tracks how far through the
+      // INPUT we are, which is what setExpectedSize() counts too. Counting only
+      // kept MS2 would stall the bar short of 100% on any file with MS1 scans.
+      if (tick_) tick_();
       if (s.getMSLevel() != 2 || s.empty() || s.getPrecursors().empty()) return;
       // Subsample AFTER the MS2 filter so the fraction is of taggable spectra, and
       // BEFORE buffering so dropped spectra never occupy memory. Called serially
@@ -114,10 +199,15 @@ namespace
     /// FasTag tags spectra; chromatograms are not input to it.
     void consumeChromatogram(ChromatogramType&) override {}
 
-    /// Deliberately ignored. Presizing from it would make correctness depend on
-    /// a call the interface only recommends ("expected to be called"); the flush
-    /// callback grows its own storage instead.
-    void setExpectedSize(Size, Size) override {}
+    /// Still NOT used for presizing -- that would make correctness depend on a
+    /// call the interface only recommends ("expected to be called"), and the
+    /// flush callback grows its own storage instead. It is forwarded to the
+    /// progress hook only, where being advisory is harmless: a wrong or missing
+    /// count costs an approximate percentage, never a wrong result.
+    void setExpectedSize(Size n_spectra, Size) override
+    {
+      if (on_size_) on_size_(n_spectra);
+    }
 
     void setExperimentalSettings(const ExperimentalSettings& e) override { settings_ = e; }
     const ExperimentalSettings& settings() const { return settings_; }
@@ -128,6 +218,8 @@ namespace
 
   private:
     Flush flush_;
+    std::function<void()> tick_;
+    std::function<void(Size)> on_size_;
     size_t budget_;
     double keep_ = 1.0;
     std::mt19937 rng_;
@@ -253,10 +345,18 @@ protected:
     // over the tag hits. A reduced reference set gives honest genus/family
     // resolution; short peptide tags cannot resolve species. Pair with
     // -subsample_* for a fast call on a large run.
-    registerInputFile_("taxdb", "<file>", "", "Tag->taxon index (built by buildtaxdb) for species detection", false);
-    registerInputFile_("taxonomy_nodes", "<file>", "", "NCBI taxonomy nodes.dmp (for -taxdb)", false);
-    registerInputFile_("taxonomy_names", "<file>", "", "NCBI taxonomy names.dmp (for -taxdb)", false);
-    registerOutputFile_("species_out", "<file>", "", "Ranked taxa TSV (requires -taxdb)", false);
+    // The switch. Off by default -- loading an index costs seconds and ~2 GB,
+    // which no plain tagging run should pay for. With it on, the three inputs
+    // below default to the taxonomy bundled beside the binary, so `-species` on
+    // its own is a complete request.
+    registerFlag_("species", "Infer which taxa are present from the tags. Uses the bundled "
+                             "taxonomy unless -taxdb/-taxonomy_* are given, and writes "
+                             "<out>.species.tsv unless -species_out is given");
+
+    registerInputFile_("taxdb", "<file>", "", "Tag->taxon index (built by buildtaxdb). Default: the bundled tax_k7.taxdb", false);
+    registerInputFile_("taxonomy_nodes", "<file>", "", "NCBI taxonomy nodes.dmp. Default: the bundled nodes.dmp", false);
+    registerInputFile_("taxonomy_names", "<file>", "", "NCBI taxonomy names.dmp. Default: the bundled names.dmp", false);
+    registerOutputFile_("species_out", "<file>", "", "Ranked taxa TSV. Default: <out> with a .species.tsv suffix", false);
     setValidFormats_("species_out", ListUtils::create<String>("tsv"));
     registerIntOption_("species_min_len", "<n>", 0,
                        "Ignore tags shorter than this for taxonomy; 0 uses the index k", false);
@@ -345,6 +445,39 @@ protected:
 
   ExitCodes main_(int, const char**) override
   {
+    // Species precondition, checked BEFORE the run rather than after.
+    //
+    // The index is keyed on k-mers, so a tag shorter than k can never be looked
+    // up. With the default tag_length of 3 against the bundled k=7 index that is
+    // EVERY tag: the run used to succeed, spend seconds and ~2 GB loading the
+    // index, and write a header-only report -- which reads as "nothing found"
+    // instead of "nothing could be found". A warning after the fact was not
+    // enough; refuse up front and say exactly what to change.
+    if (getFlag_("species"))
+    {
+      String probe_taxdb = getStringOption_("taxdb");
+      if (probe_taxdb.empty())
+      {
+        const String d = taxonomyDir_();
+        if (!d.empty()) probe_taxdb = d + "/tax_k7.taxdb";
+      }
+      const int kk = probe_taxdb.empty() ? -1 : peekTaxdbK_(probe_taxdb);
+      if (kk > 0)
+      {
+        const int reach = getIntOption_("tag_length") + 2 * getIntOption_("extension");
+        if (reach < kk)
+        {
+          OPENMS_LOG_ERROR << "-species: tag_length (" << getIntOption_("tag_length")
+                           << ") + 2*extension (" << getIntOption_("extension") << ") = "
+                           << reach << " cannot reach the index k = " << kk
+                           << ", so every tag would be too short to look up and the "
+                           << "report would be empty. Set -tag_length " << kk
+                           << " (or raise -extension)." << std::endl;
+          return ILLEGAL_PARAMETERS;
+        }
+      }
+    }
+
     const String in = getStringOption_("in");
     const String out = getStringOption_("out");
     const String fasta = getStringOption_("fasta");
@@ -723,21 +856,68 @@ protected:
     // mzPeak path, which cannot be counted before it is read.
     const bool emit_progress = getFlag_("progress");
     std::atomic<long long> progress_done{0};
-    const long long progress_total = mzpeak_in ? 0 : static_cast<long long>(n_spec);
-    // ~200 updates over a known total (min every spectrum for small files), or
-    // every 128 spectra when the total is unknown: bounded line rate at any size.
-    const long long progress_step =
-        progress_total <= 0 ? 128 : (progress_total > 200 ? progress_total / 200 : 1);
+    // Not const, and 0 until known: the mzPeak path learns its spectrum count
+    // from setExpectedSize() partway in (see the consumer's progress hooks), so
+    // that run starts indeterminate and becomes a real percentage.
+    std::atomic<long long> progress_total{mzpeak_in ? 0 : static_cast<long long>(n_spec)};
+    std::atomic<int> progress_pct{-1};
+    std::atomic<long long> progress_ms{0};
+    const auto progress_t0 = std::chrono::steady_clock::now();
+    auto elapsed_ms = [&progress_t0]() {
+      return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - progress_t0).count());
+    };
+
+    // At most ONE line per whole percent, and at least one every 5 s.
+    //
+    // "At most one per percent", not "one for every percent": the emitting
+    // thread reports the counter's CURRENT value, which other threads have
+    // advanced past, so a busy run legitimately jumps 5% -> 8%. That is right
+    // for a progress bar and wrong to describe as per-percent.
+    //
+    // Percent alone goes quiet for minutes on a slow file (one 5 GB run spends
+    // ~a minute in metadata before the first spectrum), which reads as a hung
+    // GUI; a pure time interval spams a fast run. Together the line rate is
+    // bounded by ~101 + elapsed/5s regardless of file size or speed.
     auto tick = [&]()
     {
       if (!emit_progress) return;
       const long long d = ++progress_done;
-      // Emit the first tick immediately (so a GUI shows activity at once), then
-      // at each step boundary, then exactly at completion for a known total.
-      if (d == 1 || d % progress_step == 0 || d == progress_total)
+      const long long tot = progress_total.load(std::memory_order_relaxed);
+      const int pct = tot > 0 ? static_cast<int>((d * 100) / tot) : -1;
+      // 100% is NOT emitted here. The loop finishing is not the tool finishing --
+      // species classification and -out_spectra still run -- so the completion
+      // line is reserved for the end of main_(). Without this the last percent
+      // and the completion line print the same text twice.
+      bool want = (d == 1) || (pct < 100 && pct > progress_pct.load(std::memory_order_relaxed));
+      // The clock is consulted only every 64th spectrum: the time rule exists for
+      // SLOW runs, where 64 spectra is a rounding error, and this keeps the hot
+      // path free of a clock read per spectrum.
+      // The clock is read on EVERY tick, not one in 64. Sampling made the
+      // advertised 5 s guarantee false exactly where it matters: at one
+      // spectrum per second the gap became ~63 s, and a single slow spectrum
+      // produced no heartbeat at all. steady_clock::now() is tens of
+      // nanoseconds against microseconds-to-seconds of tagging per spectrum.
+      if (!want && elapsed_ms() - progress_ms.load(std::memory_order_relaxed) >= 5000)
       {
+        want = true;
+      }
+      if (!want) return;
 #pragma omp critical(fastag_progress)
-        std::cerr << "FASTAG_PROGRESS done=" << d << " total=" << progress_total << std::endl;
+      {
+        // Re-check under the lock: several threads can decide to emit at once,
+        // and without this they each print a line for the same percent.
+        const long long dd = progress_done.load();
+        const long long tt = progress_total.load();
+        const int pp = tt > 0 ? static_cast<int>((dd * 100) / tt) : -1;
+        const long long now = elapsed_ms();
+        if (dd == 1 || (pp < 100 && pp > progress_pct.load())
+            || (pp < 100 && now - progress_ms.load() >= 5000))
+        {
+          progress_pct.store(pp);
+          progress_ms.store(now);
+          std::cerr << "FASTAG_PROGRESS done=" << dd << " total=" << tt << std::endl;
+        }
       }
     };
 
@@ -755,7 +935,6 @@ protected:
       {
         const size_t tid = static_cast<size_t>(omp_get_thread_num());
         record(base + static_cast<size_t>(j), tag_one(buf[j], tid), buf[j]);
-        tick();
       }
       buf.clear();
     };
@@ -779,6 +958,12 @@ protected:
       // reader streams. Tracked in doc/BACKLOG-mzpeak.md.
       ChunkingConsumer consumer(flush_chunk, 1000u * 1000u,
                                 subsample_frac > 0.0 ? subsample_frac : 1.0, subsample_seed);
+      // Progress for the streaming path: the count arrives from the reader via
+      // setExpectedSize(), so the run reports "n spectra" until it does and a
+      // real percentage afterwards.
+      consumer.setProgressHooks(tick, [&progress_total](Size n) {
+        progress_total.store(static_cast<long long>(n));
+      });
       MzPeakFile().transform(in, &consumer);
       consumer.finish();   // the final partial chunk, otherwise silently dropped
       // Run-level settings for -out_spectra come from the consumer here; the
@@ -812,6 +997,35 @@ protected:
     }
     }
 
+    // Land the bar on 100%.
+    //
+    // The denominator can be an upper bound the run never reaches: for mzPeak it
+    // comes from setExpectedSize(), which counts every spectrum the file's
+    // metadata describes, while the reader delivers only those with point data
+    // (42,092 of 53,521 on a real Lumos run -- the bar would stop at 79%).
+    // Emitting done==total once at the end costs one line and avoids a GUI that
+    // sits at four-fifths on a finished run.
+    // NOTE: this is deliberately NOT the completion line. It reports that the
+    // TAGGING LOOP finished; species classification and -out_spectra can still
+    // run for many seconds after it, and an earlier version emitted 100% here
+    // and then kept working -- or emitted 100% and then returned an error. The
+    // real completion line is at the end of main_().
+    if (false)
+    {
+      // Skipped when the loop already reported 100%, which the indexed path
+      // does via its d == total case -- otherwise every mzML run ends with the
+      // same line twice.
+      //
+      // total is the LARGER of what was announced and what was delivered, never
+      // the delivered count alone. The mzPeak reader announces every spectrum in
+      // the file but delivers only those with point data (42,092 of 53,521), and
+      // rewriting total downwards made it non-monotonic -- a consumer could not
+      // tell "the reader skipped some" from "the total was always smaller".
+      const long long dd = progress_done.load();
+      const long long tt = std::max(dd, progress_total.load());
+      std::cerr << "FASTAG_PROGRESS done=" << tt << " total=" << tt << std::endl;
+    }
+
     for (size_t t = 0; t < per_thread_len.size(); ++t)
     {
       n_ms2 += per_thread_ms2[t];
@@ -841,16 +1055,73 @@ protected:
     // breadth it has in the index, and rank. The q-value is a ranking aid, not a
     // calibrated FDR: the per-k-mer background is a proxy and the chimeric-null
     // problem (see F4 in doc/BACKLOG.md) applies here too.
-    const String taxdb = getStringOption_("taxdb");
-    const String species_out = getStringOption_("species_out");
-    if (!taxdb.empty() && !species_out.empty())
+    String taxdb = getStringOption_("taxdb");
+    String species_out = getStringOption_("species_out");
+    String nodes = getStringOption_("taxonomy_nodes");
+    String names = getStringOption_("taxonomy_names");
+    // -species is the switch. Passing -taxdb and -species_out explicitly still
+    // works without it, which is how this was driven before the flag existed.
+    const bool want_species = getFlag_("species") || (!taxdb.empty() && !species_out.empty());
+
+    if (want_species)
     {
-      const String nodes = getStringOption_("taxonomy_nodes");
-      const String names = getStringOption_("taxonomy_names");
-      if (nodes.empty() || names.empty())
+      const String tdir = taxonomyDir_();
+      // An index and a taxonomy are ONE coherent set. Defaulting them
+      // independently let `-taxdb custom.taxdb` silently pair a custom index
+      // with the bundled 117-node dumps: rollUp() drops every taxid the dumps
+      // do not know, so calls go missing and the background is biased -- with
+      // no error. Either all three come from the bundle, or the user supplies
+      // the taxonomy that goes with their index.
+      const bool custom_index = !taxdb.empty();
+      if (!custom_index && !tdir.empty()) taxdb = tdir + "/tax_k7.taxdb";
+      if (!custom_index)
       {
-        OPENMS_LOG_ERROR << "-taxdb needs -taxonomy_nodes and -taxonomy_names." << std::endl;
+        if (nodes.empty() && !tdir.empty()) nodes = tdir + "/nodes.dmp";
+        if (names.empty() && !tdir.empty()) names = tdir + "/names.dmp";
+      }
+      else if (nodes.empty() || names.empty())
+      {
+        OPENMS_LOG_ERROR << "-taxdb was given explicitly, so -taxonomy_nodes and "
+                         << "-taxonomy_names must be too: the bundled taxonomy "
+                         << "describes only the bundled index, and pairing it with "
+                         << "another index silently drops every taxon it does not "
+                         << "know." << std::endl;
         return ILLEGAL_PARAMETERS;
+      }
+      if (species_out.empty())
+      {
+        // Strip an extension only if the dot is in the FILE NAME. `-out
+        // /tmp/run.v1/tags` has its last dot in the directory, and blindly
+        // cutting there wrote /tmp/run.species.tsv -- a different directory.
+        const size_t slash = out.find_last_of("/\\");
+        const size_t dot = out.rfind('.');
+        const bool ext = dot != std::string::npos && (slash == std::string::npos || dot > slash);
+        species_out = (ext ? out.substr(0, dot) : out) + ".species.tsv";
+      }
+
+      // Say which file is missing and where it was looked for. "Failed to load"
+      // on an empty path is useless when the whole point of the defaults is that
+      // the user never typed one.
+      for (const auto& need : {std::make_pair("taxdb", taxdb),
+                               std::make_pair("taxonomy_nodes", nodes),
+                               std::make_pair("taxonomy_names", names)})
+      {
+        if (need.second.empty() || !File::exists(need.second))
+        {
+          OPENMS_LOG_ERROR << "-species: no " << need.first << ". ";
+          if (tdir.empty())
+          {
+            OPENMS_LOG_ERROR << "No bundled taxonomy was found next to the executable "
+                             << "(expected <bin>/../share/FasTag/taxonomy). Pass -" << need.first
+                             << " explicitly, or set FASTAG_TAXONOMY_DIR." << std::endl;
+          }
+          else
+          {
+            OPENMS_LOG_ERROR << "Looked in '" << tdir << "'. Pass -" << need.first
+                             << " explicitly, or set FASTAG_TAXONOMY_DIR." << std::endl;
+          }
+          return ILLEGAL_PARAMETERS;
+        }
       }
       FasTag::TaxIndex idx;
       std::string ierr;
@@ -869,6 +1140,24 @@ protected:
       const int kk = idx.k();
       int min_len = getIntOption_("species_min_len");
       if (min_len < kk) min_len = kk;
+
+      // The silent-empty trap: the index is keyed on k-mers, so a tag shorter
+      // than k can never be looked up. With the default tag_length of 3 against
+      // a k=7 index that is EVERY tag -- the run then succeeds, reports "0
+      // spectra contributed taxon evidence" and writes a header-only file, which
+      // reads as "nothing found" rather than "nothing could have been found".
+      const int reach = getIntOption_("tag_length") + 2 * getIntOption_("extension");
+      if (reach < kk)
+      {
+        OPENMS_LOG_WARN << "-species: no tag can reach the index k (this run was "
+                        << "driven by -taxdb/-species_out rather than -species, which "
+                        << "checks up front). tag_length ("
+                        << getIntOption_("tag_length") << ") + 2*extension ("
+                        << getIntOption_("extension") << ") = " << reach << " < k = " << kk
+                        << ", so every tag is too short to look up and the report WILL be empty. "
+                        << "Raise -tag_length to " << kk << " (or use -extension to reach it)."
+                        << std::endl;
+      }
 
       // Per-spectrum taxon support -> per-leaf spectrum counts.
       std::map<uint32_t, uint64_t> hits;
@@ -1015,6 +1304,18 @@ protected:
       }
       OPENMS_LOG_INFO << "Wrote " << kept.size() << " spectra to " << out_spectra << std::endl;
     }
+    // Completion, emitted once everything the run promised has actually been
+    // written: tags, species report and -out_spectra. total is the LARGER of the
+    // announced and delivered counts, so it never shrinks (the mzPeak reader
+    // announces every spectrum in the file but delivers only those with point
+    // data, 42,092 of 53,521).
+    if (emit_progress)
+    {
+      const long long dd = progress_done.load();
+      const long long tt = std::max(dd, progress_total.load());
+      std::cerr << "FASTAG_PROGRESS done=" << tt << " total=" << tt << std::endl;
+    }
+
     return EXECUTION_OK;
   }
 };

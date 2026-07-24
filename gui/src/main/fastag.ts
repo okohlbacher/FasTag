@@ -9,6 +9,20 @@ import { spawn, spawnSync, ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { app } from 'electron'
+import manifest from '../common/params.generated.json'
+
+// name -> declared type, straight from the tool's own -write_ini. This is the
+// allowlist buildArgs() validates against.
+const PARAM_TYPES = new Map<string, string>(
+  (manifest.params as { name: string; type: string }[]).map((p) => [p.name, p.type])
+)
+
+// In the manifest but NOT settable on the command line, or managed by the app.
+// `-version` is the trap: -write_ini records the tool version as an ITEM, so it
+// looks like an ordinary parameter, and passing it back makes the CLI abort with
+// "Unknown option(s) '[-version]'". The renderer already filters to the params
+// it renders; this is the second line of defence for presets and IPC.
+const NOT_SETTABLE = new Set(['version', 'log', 'debug', 'no_progress', 'force', 'test', 'in', 'out'])
 
 export interface BinaryInfo {
   bin: string
@@ -19,17 +33,13 @@ export interface BinaryInfo {
   detail: string
 }
 
-// The FasTag options the P0/P1 skeleton drives. This is the curated subset;
-// the full self-describing param manifest (from -write_ini) comes in a later
-// phase. Keeping it explicit means we never interpolate an unknown flag.
+// A run is the two paths plus a bag of parameter values keyed by CLI option
+// name. The names are validated against the generated manifest below, so the
+// renderer can only ever produce flags the tool actually has.
 export interface RunParams {
   in: string
   out: string
-  tag_length?: number
-  fragment_tolerance?: number
-  fragment_tolerance_unit?: 'ppm' | 'Da'
-  max_tags?: number
-  threads?: number
+  params?: Record<string, string | number | boolean | string[]>
   progress?: boolean
 }
 
@@ -91,13 +101,30 @@ export function probeBinary(): BinaryInfo {
 // each value is its own array element — never concatenated into a string.
 function buildArgs(p: RunParams): string[] {
   const args = ['-in', p.in, '-out', p.out]
-  if (p.tag_length != null) args.push('-tag_length', String(p.tag_length))
-  if (p.fragment_tolerance != null) args.push('-fragment_tolerance', String(p.fragment_tolerance))
-  // The tool's tolerance is unit-sensitive (default ppm); a value without its
-  // unit is meaningless. Always pass the unit alongside the value.
-  if (p.fragment_tolerance_unit != null) args.push('-fragment_tolerance_unit', p.fragment_tolerance_unit)
-  if (p.max_tags != null) args.push('-max_tags', String(p.max_tags))
-  if (p.threads != null) args.push('-threads', String(p.threads))
+
+  for (const [name, value] of Object.entries(p.params ?? {})) {
+    // Allowlist: only names the tool actually declares. Anything else -- a stale
+    // preset, a renderer bug, a crafted IPC message -- is dropped rather than
+    // handed to the process as an unknown flag.
+    const spec = PARAM_TYPES.get(name)
+    if (!spec) continue
+    if (NOT_SETTABLE.has(name)) continue
+
+    if (spec === 'bool') {
+      // TOPP flags are presence-only: passing "false" would set them.
+      if (value === true) args.push(`-${name}`)
+      continue
+    }
+    if (Array.isArray(value)) {
+      const items = value.map((v) => String(v).trim()).filter((v) => v !== '')
+      if (items.length) args.push(`-${name}`, ...items)
+      continue
+    }
+    const s = String(value).trim()
+    if (s === '') continue // unset optional (an empty path is not "no path")
+    args.push(`-${name}`, s)
+  }
+
   if (p.progress) args.push('-progress')
   return args
 }

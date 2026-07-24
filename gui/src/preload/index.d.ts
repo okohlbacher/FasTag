@@ -22,7 +22,33 @@ export interface RunResult {
   message?: string
 }
 
+export interface Taxon {
+  rank: string
+  taxid: number
+  name: string
+  observed: number
+  expected: number
+  enrichment: number
+  logP: number
+  q: number
+}
+
+export interface SpeciesReport {
+  path: string
+  taxa: Taxon[]
+  empty: boolean
+}
+
+export interface TaxdbInfo {
+  path: string
+  k: number
+  kmers: number
+}
+
 export interface FastagApi {
+  taxdbInfo: (explicit?: string) => Promise<TaxdbInfo | null>
+  species: (path: string) => Promise<SpeciesReport | null>
+  openTaxon: (taxid: number) => Promise<boolean>
   probe: () => Promise<BinaryInfo>
   pickInput: () => Promise<string | null>
   pickOutput: (defaultPath?: string) => Promise<string | null>
