@@ -146,17 +146,13 @@ jobs:
           git clone -q https://github.com/okohlbacher/OpenMS-mzPeakRW.git mzpeak-rw
           git -C mzpeak-rw checkout -q "$MZPEAK_REF"
           # src/openms ONLY -- the library, not the TOPP tools or tests the
-          # overlay also carries. FasTag links libOpenMS and nothing else, and
-          # one of those tools does not compile on MSVC:
+          # overlay also carries. FasTag links libOpenMS and nothing else.
           #
-          #   src/topp/DIAPseudoSpectra.cpp(1447):
-          #     error C3861: 'omp_set_max_active_levels': identifier not found
-          #
-          # omp_set_max_active_levels is OpenMP 3.0; MSVC's /openmp implements
-          # 2.0 only. This job builds every target before installing, so unlike
-          # ci.yml it cannot simply not-build the tool -- not overlaying it is
-          # what keeps it out. src/topp/executables.cmake stays as the base has
-          # it, so the tool is never added to the build in the first place.
+          # This used to double as the fix for DIAPseudoSpectra not compiling on
+          # MSVC: the tool existed only in the overlay, so declining to copy
+          # src/topp kept it out of the build entirely. That stopped being true
+          # when OPENMS_BASE_SHA moved to 9cb5f12 -- the base now ships the tool
+          # itself. See the dedicated step below, which removes it explicitly.
           #
           # Fail loudly on an unexpected layout rather than silently building a
           # stock OpenMS and shipping a Windows binary with no mzPeak while the
@@ -170,6 +166,41 @@ jobs:
               done
           grep -q MZPEAK openms-src/src/openms/include/OpenMS/FORMAT/FileTypes.h
           grep -q MzPeakFile.h openms-src/src/openms/include/OpenMS/FORMAT/sources.cmake
+
+      - name: Drop DIAPseudoSpectra from the Windows build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # DIAPseudoSpectra does not compile with MSVC:
+          #
+          #   src/topp/DIAPseudoSpectra.cpp(1398):
+          #     error C3861: 'omp_set_max_active_levels': identifier not found
+          #
+          # omp_set_max_active_levels is OpenMP 3.0; MSVC's /openmp implements
+          # 2.0 only. The other four platforms use GCC/Clang and are unaffected,
+          # which is why ci.yml needs nothing like this.
+          #
+          # Until the base moved to 9cb5f12 this was handled by simply not
+          # overlaying src/topp -- the tool lived only in OpenMS-mzPeakRW, so the
+          # base never had it. The base ships it now, and this job builds every
+          # target before installing, so it has to come out of the list by hand.
+          # FasTag links libOpenMS and never invokes this tool, so dropping the
+          # executable costs the release nothing.
+          F=openms-src/src/topp/executables.cmake
+          if ! grep -qx 'DIAPseudoSpectra' "$F"; then
+            echo "::error::DIAPseudoSpectra is not listed in $F."
+            echo "::error::Upstream renamed/moved it, or it is already gone. Re-check"
+            echo "::error::whether it still fails under MSVC before deleting this step."
+            exit 1
+          fi
+          sed -i.bak '/^DIAPseudoSpectra$/d' "$F"
+          rm -f "$F.bak"
+          # Assert it is really gone: a silent no-op here reintroduces the
+          # ~50-minute build failure this step exists to prevent.
+          if grep -qx 'DIAPseudoSpectra' "$F"; then
+            echo "::error::failed to remove DIAPseudoSpectra from $F"
+            exit 1
+          fi
 
       - name: Check out contrib at the pinned commit
         run: |
