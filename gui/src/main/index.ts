@@ -54,6 +54,18 @@ ipcMain.handle('dialog:pickInput', async () => {
   return r.canceled ? null : r.filePaths[0]
 })
 
+ipcMain.handle('dialog:pickInputs', async () => {
+  const r = await dialog.showOpenDialog({
+    title: 'Select spectra files for batch',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Spectra', extensions: ['mzML', 'mzml', 'mzpeak', 'mzPeak'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  })
+  return r.canceled ? [] : r.filePaths
+})
+
 ipcMain.handle('dialog:pickOutput', async (_e, defaultPath?: string) => {
   const r = await dialog.showSaveDialog({
     title: 'Save tags as',

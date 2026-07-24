@@ -5,6 +5,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 const api = {
   probe: () => ipcRenderer.invoke('fastag:probe'),
   pickInput: () => ipcRenderer.invoke('dialog:pickInput'),
+  pickInputs: () => ipcRenderer.invoke('dialog:pickInputs'),
   pickOutput: (defaultPath?: string) => ipcRenderer.invoke('dialog:pickOutput', defaultPath),
   run: (params: unknown) => ipcRenderer.invoke('fastag:run', params),
   cancel: () => ipcRenderer.invoke('fastag:cancel'),

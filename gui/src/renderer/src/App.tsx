@@ -20,6 +20,13 @@ function defaultSpeciesOut(out: string): string {
   return `${dot > 0 ? out.slice(0, dot) : out}.species.tsv`
 }
 
+interface Job {
+  input: string
+  out: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  tags?: number
+}
+
 function defaultOut(input: string): string {
   const dot = input.lastIndexOf('.')
   const stem = dot > 0 ? input.slice(0, dot) : input
@@ -54,6 +61,10 @@ export default function App(): JSX.Element {
   const [presets, setPresets] = useState<string[]>([])
   const [preset, setPreset] = useState('')
   const [savingName, setSavingName] = useState<string | null>(null)  // non-null = the 'save as' input is open
+  const [jobs, setJobs] = useState<Job[]>([])
+  const [batchRunning, setBatchRunning] = useState(false)
+  // Resolver for the run currently in flight (single or batch); see onDone.
+  const resolveRun = useRef<((r: RunResult) => void) | null>(null)
   // Parsed from the CLI's own summary line, so the panel reports what the run
   // actually did rather than a number the GUI guessed.
   const [evidence, setEvidence] = useState<{ contributed: number | null; ms2: number | null }>({
@@ -72,10 +83,6 @@ export default function App(): JSX.Element {
   // run has spent seconds and ~2 GB to produce an empty table.
   const reach = Number(values['tag_length'] || 0) + 2 * Number(values['extension'] || 0)
   const tooShort = speciesOn && taxdbK != null && reach < taxdbK ? { reach, k: taxdbK } : null
-
-  // Latest run context for the IPC subscription below, which registers once.
-  const runCtx = useRef({ out: '', speciesOn: false, speciesOut: '' })
-  runCtx.current = { out, speciesOn, speciesOut: String(values['species_out'] || '') }
 
   useEffect(() => {
     window.fastag.probe().then(setBin)
@@ -109,16 +116,12 @@ export default function App(): JSX.Element {
       setRunning(false)
       setProgress(null)
       setLog((l) => [...l, r.ok ? '— done —' : `— failed (${r.message ?? `exit ${r.code}`}) —`])
-      const ctx = runCtx.current
-      if (r.ok && ctx.out) {
-        window.fastag.preview(ctx.out, 200).then(setPreview)
-        if (ctx.speciesOn) {
-          window.fastag.species(ctx.speciesOut || defaultSpeciesOut(ctx.out)).then((rep) => {
-            setSpecies(rep)
-            if (rep && !rep.empty) setTab('species')
-          })
-        }
-      }
+      // Hand the result to whoever is awaiting this run (single or batch). Only
+      // one run is ever in flight (the main process enforces it), so one pending
+      // resolver is enough.
+      const resolve = resolveRun.current
+      resolveRun.current = null
+      if (resolve) resolve(r)
     })
     return () => {
       offLog()
@@ -141,6 +144,16 @@ export default function App(): JSX.Element {
     }
   }
 
+  async function addBatchFiles(): Promise<void> {
+    const files = await window.fastag.pickInputs()
+    if (!files.length) return
+    setJobs((js) => {
+      const have = new Set(js.map((j) => j.input))
+      const add = files.filter((f) => !have.has(f)).map((f) => ({ input: f, out: defaultOut(f), status: 'queued' as const }))
+      return [...js, ...add]
+    })
+  }
+
   async function pickFor(spec: ParamSpec): Promise<void> {
     const p =
       spec.type === 'output-file'
@@ -149,24 +162,64 @@ export default function App(): JSX.Element {
     if (p) setValue(spec.name, p)
   }
 
+  // Only the parameters the UI renders. The form seeds a value for every manifest
+  // entry, but HIDDEN ones must never reach the command line: `-version` is
+  // recorded in the INI yet rejected as an option, so sending the whole record
+  // aborts the run with "Unknown option(s) '[-version]'".
+  function submittedParams(): Record<string, ParamValue> {
+    const s: Record<string, ParamValue> = {}
+    for (const name of RENDERED) s[name] = values[name]
+    return s
+  }
+
+  // Run one file and resolve when it finishes. Shared by single and batch runs.
+  function runOne(inFile: string, outFile: string): Promise<RunResult> {
+    return new Promise<RunResult>((resolve) => {
+      setLog([])
+      setProgress(null)
+      setRunning(true)
+      resolveRun.current = resolve
+      window.fastag.run({ in: inFile, out: outFile, params: submittedParams() }).then((res) => {
+        if (!res.started) {
+          setRunning(false)
+          resolveRun.current = null
+          setLog([`could not start: ${res.reason ?? 'unknown'}`])
+          resolve({ ok: false, code: null, message: res.reason })
+        }
+      })
+    })
+  }
+
+  async function showResults(outFile: string): Promise<void> {
+    setPreview(null)
+    const rep0 = await window.fastag.preview(outFile, 200)
+    setPreview(rep0)
+    if (speciesOn) {
+      const sp = await window.fastag.species(String(values['species_out'] || '') || defaultSpeciesOut(outFile))
+      setSpecies(sp)
+      if (sp && !sp.empty) setTab('species')
+    }
+  }
+
   async function run(): Promise<void> {
     if (!input || !out) return
-    setLog([])
-    setPreview(null)
-    setProgress(null)
-    setRunning(true)
-    window.fastag.saveLast(values)   // remember this run's parameters for next launch
-    // Only the parameters the UI actually renders. The form seeds a value for
-    // every manifest entry, but HIDDEN ones must never reach the command line:
-    // `-version` is recorded in the INI yet rejected as an option, so sending
-    // the whole record aborts the run with "Unknown option(s) '[-version]'".
-    const submitted: Record<string, ParamValue> = {}
-    for (const name of RENDERED) submitted[name] = values[name]
-    const res = await window.fastag.run({ in: input, out, params: submitted })
-    if (!res.started) {
-      setRunning(false)
-      setLog([`could not start: ${res.reason ?? 'unknown'}`])
+    window.fastag.saveLast(values)
+    const r = await runOne(input, out)
+    if (r.ok) await showResults(out)
+  }
+
+  async function runBatch(): Promise<void> {
+    if (jobs.length === 0 || batchRunning) return
+    window.fastag.saveLast(values)
+    setBatchRunning(true)
+    for (let i = 0; i < jobs.length; i++) {
+      if (jobs[i].status === 'done') continue
+      setJobs((js) => js.map((j, k) => (k === i ? { ...j, status: 'running' } : j)))
+      const r = await runOne(jobs[i].input, jobs[i].out)
+      setJobs((js) => js.map((j, k) => (k === i ? { ...j, status: r.ok ? 'done' : 'failed' } : j)))
+      if (r.ok && i === jobs.length - 1) await showResults(jobs[i].out)  // preview the last
     }
+    setBatchRunning(false)
   }
 
   function resetDefaults(): void {
@@ -197,7 +250,7 @@ export default function App(): JSX.Element {
     setPreset('')
   }
 
-  const canRun = bin?.ok && !!input && !!out && !running
+  const canRun = bin?.ok && !!input && !!out && !running && !batchRunning
   const field = (name: string): JSX.Element | null => {
     const spec = PARAM_BY_NAME.get(name)
     if (!spec) return null
@@ -228,16 +281,57 @@ export default function App(): JSX.Element {
         <section className="controls">
           <div className="field">
             <label>Input spectra (mzML / mzPeak)</label>
-            <button className="secondary" onClick={pickInput}>
-              Choose file…
-            </button>
-            {input && <div className="path">{input}</div>}
+            <div className="row tight">
+              <button className="secondary" onClick={pickInput}>
+                Choose file…
+              </button>
+              <button className="secondary" onClick={addBatchFiles} title="Queue several files to run in turn">
+                Add batch…
+              </button>
+            </div>
+            {input && jobs.length === 0 && <div className="path">{input}</div>}
           </div>
 
-          <div className="field">
-            <label htmlFor="out">Output tags (TSV)</label>
-            <input id="out" value={out} onChange={(e) => setOut(e.target.value)} placeholder="tags.tsv" />
-          </div>
+          {jobs.length > 0 && (
+            <div className="field batch">
+              <label>
+                Batch queue
+                <span className="count">
+                  {jobs.filter((j) => j.status === 'done').length}/{jobs.length} done
+                </span>
+              </label>
+              <ul className="jobs">
+                {jobs.map((j, i) => (
+                  <li key={j.input} className={`job ${j.status}`}>
+                    <span className="st" aria-hidden>
+                      {j.status === 'done' ? '✓' : j.status === 'failed' ? '✕' : j.status === 'running' ? '⟳' : '·'}
+                    </span>
+                    <span className="jn" title={j.input}>{j.input.split('/').pop()}</span>
+                    {!batchRunning && (
+                      <button className="rm" title="remove" onClick={() => setJobs((js) => js.filter((_, k) => k !== i))}>
+                        ×
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <div className="row tight">
+                <button onClick={runBatch} disabled={batchRunning || !bin?.ok}>
+                  {batchRunning ? 'Running batch…' : `Run batch (${jobs.filter((j) => j.status !== 'done').length})`}
+                </button>
+                <button className="secondary slim" onClick={() => setJobs([])} disabled={batchRunning}>
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
+
+          {jobs.length === 0 && (
+            <div className="field">
+              <label htmlFor="out">Output tags (TSV)</label>
+              <input id="out" value={out} onChange={(e) => setOut(e.target.value)} placeholder="tags.tsv" />
+            </div>
+          )}
 
           <div className="sep" />
 

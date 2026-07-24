@@ -51,7 +51,7 @@ Cancel kills the process tree. Defaults mirror the CLI exactly.
 - Run IDs + a state machine (queued→running→done/failed/cancelled).
 - Write output to `*.partial`, rename on success (no half-written TSVs).
 
-### P4 — batch
+### P4 — batch ✅ (sequential queue done)
 - Queue N files, per-file status, sequential by default, cancel one/all,
   output-collision handling, failure isolation (one file failing doesn't stop the queue).
 

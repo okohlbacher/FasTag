@@ -61,6 +61,7 @@ export interface FastagApi {
   openTaxon: (taxid: number) => Promise<boolean>
   probe: () => Promise<BinaryInfo>
   pickInput: () => Promise<string | null>
+  pickInputs: () => Promise<string[]>
   pickOutput: (defaultPath?: string) => Promise<string | null>
   run: (params: Record<string, unknown>) => Promise<{ started: boolean; reason?: string }>
   cancel: () => Promise<{ cancelled: boolean }>
