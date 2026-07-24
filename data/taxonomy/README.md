@@ -31,8 +31,11 @@ pathogens, gut microbiome, archaea). It is not in the per-platform tarballs
 because it is large and platform-independent. Get it once:
 
 ```
-# download FasTag-taxonomy-k7.tar.gz from the release, then:
-tar xzf FasTag-taxonomy-k7.tar.gz -C "$(dirname "$(command -v FasTag)")/.."   # into share-FasTag-taxonomy/
+# download FasTag-taxonomy-k7.tar.gz from the release, then extract it into the
+# FasTag directory (next to the executable). Its top-level dir is
+# share-FasTag-taxonomy, exactly where -species looks:
+tar xzf FasTag-taxonomy-k7.tar.gz -C /path/to/FasTag/
+# verify: shasum -a256 -c FasTag-taxonomy-k7.tar.gz.sha256
 ```
 
 Without it, `-species` fails with a message naming the directory it searched and
