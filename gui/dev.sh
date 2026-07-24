@@ -15,8 +15,21 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# OpenMS build-tree libs + Homebrew (Arrow 25, libsvm, xerces, libomp).
-export DYLD_FALLBACK_LIBRARY_PATH="${DYLD_FALLBACK_LIBRARY_PATH:-}:/Users/kohlbach/Claude/OpenMS-mzpeak-build/build/lib:/opt/homebrew/lib:/opt/homebrew/opt/libomp/lib:/opt/homebrew/opt/libsvm/lib:/opt/homebrew/opt/xerces-c/lib"
+# OpenMS build-tree libs + Homebrew (Arrow, libsvm, xerces, libomp).
+#
+# OPENMS_LIB_DIR points at the lib/ of the OpenMS build or install tree the
+# symlinked binary was linked against. Derived from the binary's own OpenMS data
+# symlink when not set, so this works on any checkout rather than one machine.
+if [ -z "${OPENMS_LIB_DIR:-}" ] && [ -L resources/fastag/share/OpenMS ]; then
+  # .../<tree>/share/OpenMS -> <tree>. An INSTALL tree keeps its libs in
+  # <tree>/lib, a BUILD tree in <tree>/build/lib; take whichever exists.
+  _t="$(cd "$(dirname "$(readlink resources/fastag/share/OpenMS)")/.." 2>/dev/null && pwd)"
+  for _c in "$_t/lib" "$_t/build/lib"; do
+    [ -d "$_c" ] && OPENMS_LIB_DIR="$_c"
+  done
+fi
+BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+export DYLD_FALLBACK_LIBRARY_PATH="${DYLD_FALLBACK_LIBRARY_PATH:-}:${OPENMS_LIB_DIR:-}:$BREW_PREFIX/lib:$BREW_PREFIX/opt/libomp/lib:$BREW_PREFIX/opt/libsvm/lib:$BREW_PREFIX/opt/xerces-c/lib"
 
 # build-rel links Homebrew libomp while OpenMS/Arrow bring their own — two copies
 # in one process. Harmless here; a single-toolchain release build won't hit it.
