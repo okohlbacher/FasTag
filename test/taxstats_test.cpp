@@ -214,6 +214,36 @@ int main() {
   CHECK(threshold_ok, "all returned calls satisfy q <= threshold");
   CHECK(order_ok, "calls sorted by qvalue ascending");
 
+  // Regression: q-value underflow tie-break by log_pvalue. The strongest taxa
+  // all round q to exactly 0 (a double cannot hold exp(-3800)), so ranking by q
+  // alone tied them and the old order fell to `observed`, discarding the actual
+  // significance. Two nodes with q == 0 must be ordered by log_pvalue (more
+  // negative = more significant) even when their observed counts disagree.
+  {
+    std::vector<FasTag::NodeEvidence> big;
+    big.push_back({110, 900, 900});   // huge, extremely significant
+    big.push_back({120, 950, 950});   // even more observed...
+    std::vector<std::pair<uint32_t, double>> tiny_bg = {{110, 1e-6}, {120, 2e-6}};
+    // With such tiny backgrounds both q underflow to 0; 110 is MORE significant
+    // (smaller p) than 120 despite 120 having more observed, because 120's
+    // background is larger. The tie-break must therefore rank 110 first.
+    const auto c2 = tax.call(big, tiny_bg, 2000, 1.0);
+    // find positions
+    int pos110 = -1, pos120 = -1;
+    for (size_t i = 0; i < c2.size(); ++i) {
+      if (c2[i].taxid == 110) pos110 = static_cast<int>(i);
+      if (c2[i].taxid == 120) pos120 = static_cast<int>(i);
+    }
+    if (pos110 >= 0 && pos120 >= 0) {
+      const bool both_zero_q = c2[pos110].qvalue == 0.0 && c2[pos120].qvalue == 0.0;
+      // Whichever has the more-negative log_pvalue must sort first.
+      const bool ordered_by_logp =
+          (c2[pos110].log_pvalue <= c2[pos120].log_pvalue) ? pos110 < pos120 : pos120 < pos110;
+      CHECK(!both_zero_q || ordered_by_logp,
+            "q-underflow ties are broken by log_pvalue, not observed");
+    }
+  }
+
   fs::remove_all(dir, ec);
 
   if (g_failures != 0) {
