@@ -85,10 +85,16 @@ namespace
     if (!f) return -1;
     char magic[4];
     if (!f.read(magic, 4)) return -1;
-    if (std::memcmp(magic, "FTXI", 4) != 0 && std::memcmp(magic, "FTX2", 4) != 0) return -1;
+    const bool v1 = std::memcmp(magic, "FTXI", 4) == 0;
+    const bool v2 = std::memcmp(magic, "FTX2", 4) == 0;
+    if (!v1 && !v2) return -1;
     std::uint32_t ver = 0, k = 0;
     if (!f.read(reinterpret_cast<char*>(&ver), 4)) return -1;
     if (!f.read(reinterpret_cast<char*>(&k), 4)) return -1;
+    // Reject a header the real loader would reject, so a corrupt/hostile file
+    // does not yield a plausible k and a misleading precondition error.
+    if ((v1 && ver != 1) || (v2 && ver != 2)) return -1;
+    if (k < 1 || k > static_cast<std::uint32_t>(FasTag::TaxIndex::MAX_K)) return -1;
     return static_cast<int>(k);
   }
 
@@ -108,19 +114,24 @@ namespace
     // first that merely exists meant an empty ../share/FasTag/taxonomy masked a
     // complete share-FasTag-taxonomy beside it -- exactly the layout a release
     // has if the index was never installed.
+    // Prefer a directory that has the INDEX (a fully usable set), then one with
+    // the dumps (installable -- the index is a separate download), then any that
+    // merely exists (so the error names a real path). Without the index-first
+    // pass, a dumps-only install tree masked a complete flat-release dir.
     const String exe = File::getExecutablePath();
-    String first_existing;
-    for (const String& cand : {exe + "../share/FasTag/taxonomy",
-                               exe + "share-FasTag-taxonomy",
-                               exe + "taxonomy"})
+    const String cands[] = {exe + "../share/FasTag/taxonomy",
+                            exe + "share-FasTag-taxonomy",
+                            exe + "taxonomy"};
+    String with_dumps, any;
+    for (const String& c : cands)
     {
-      if (!File::isDirectory(cand)) continue;
-      if (first_existing.empty()) first_existing = cand;
-      if (File::exists(cand + "/nodes.dmp") && File::exists(cand + "/names.dmp")) return cand;
+      if (!File::isDirectory(c)) continue;
+      if (any.empty()) any = c;
+      const bool dumps = File::exists(c + "/nodes.dmp") && File::exists(c + "/names.dmp");
+      if (dumps && File::exists(c + "/tax_k7.taxdb")) return c;   // complete
+      if (dumps && with_dumps.empty()) with_dumps = c;
     }
-    // Fall back to one that exists but is incomplete, so the error names a real
-    // path the user can inspect rather than reporting "nothing found anywhere".
-    return first_existing;
+    return !with_dumps.empty() ? with_dumps : any;
   }
 }
 
@@ -463,7 +474,12 @@ protected:
     // index, and write a header-only report -- which reads as "nothing found"
     // instead of "nothing could be found". A warning after the fact was not
     // enough; refuse up front and say exactly what to change.
-    if (getFlag_("species"))
+    // Same activation condition as the run itself (below): the legacy
+    // -taxdb + -species_out invocation triggers species detection without the
+    // -species flag, and it must get the same up-front check, not the slow
+    // empty-report path.
+    if (getFlag_("species")
+        || (!getStringOption_("taxdb").empty() && !getStringOption_("species_out").empty()))
     {
       String probe_taxdb = getStringOption_("taxdb");
       if (probe_taxdb.empty())
@@ -744,6 +760,29 @@ protected:
     tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tgapped\tevalue\tmin_conf\tmean_conf\tfasta_hit"
         << (want_proforma ? "\tproforma" : "") << "\n";
 
+    // ProForma global fixed-modification prefix, built once. Fixed mods change
+    // residue masses but are NOT in the tag sequence, so a bare `C` is really
+    // carbamidomethyl-C; `<[Carbamidomethyl]@C>` declares that for the whole
+    // proteoform. Parse each "Name (Residues)" entry into `<[Name]@Residues>`.
+    std::string proforma_fixed;
+    if (want_proforma)
+    {
+      for (const String& m : getStringList_("fixed_modifications"))
+      {
+        const size_t lp = m.find('('), rp = m.rfind(')');
+        if (lp == String::npos || rp == String::npos || rp < lp) continue;
+        std::string name = m.substr(0, lp);
+        while (!name.empty() && name.back() == ' ') name.pop_back();
+        std::string targets;
+        for (char c : m.substr(lp + 1, rp - lp - 1))
+          if (c >= 'A' && c <= 'Z') targets += (c == 'I' ? 'L' : c);
+        if (name.empty() || targets.empty()) continue;
+        proforma_fixed += "<[" + name + "]@";
+        for (size_t i = 0; i < targets.size(); ++i) { if (i) proforma_fixed += ','; proforma_fixed += targets[i]; }
+        proforma_fixed += ">";
+      }
+    }
+
     PeakMap kept;
     if (streaming)
     {
@@ -789,6 +828,11 @@ protected:
       const auto tags = FasTag::tagSpectrum(spec, prec.getMZ(), prec.getCharge(), p, tables);
       per_thread_tags[tid] += tags.size();
 
+      // Reserve once so the per-field appends below do not repeatedly realloc.
+      // ~80 bytes/row covers the fixed columns and a typical native ID; the
+      // append path just grows past it for the rare long one.
+      buf.reserve(tags.size() * 80);
+
       for (const auto& t : tags)
       {
         const char* hit = "-";
@@ -828,7 +872,7 @@ protected:
         f("%.3f", t.min_conf);     buf += '\t';
         f("%.3f", t.mean_conf);    buf += '\t';
         buf += hit;
-        if (want_proforma) { buf += '\t'; buf += FasTag::toProforma(t.seq, t.nterm_mass, t.cterm_mass); }
+        if (want_proforma) { buf += '\t'; buf += FasTag::toProforma(t.seq, t.nterm_mass, t.cterm_mass, proforma_fixed); }
         buf += '\n';
       }
       return buf;
@@ -1072,27 +1116,26 @@ protected:
     if (want_species)
     {
       const String tdir = taxonomyDir_();
-      // An index and a taxonomy are ONE coherent set. Defaulting them
-      // independently let `-taxdb custom.taxdb` silently pair a custom index
-      // with the bundled 117-node dumps: rollUp() drops every taxid the dumps
-      // do not know, so calls go missing and the background is biased -- with
-      // no error. Either all three come from the bundle, or the user supplies
-      // the taxonomy that goes with their index.
-      const bool custom_index = !taxdb.empty();
-      if (!custom_index && !tdir.empty()) taxdb = tdir + "/tax_k7.taxdb";
-      if (!custom_index)
+      // The index and its taxonomy are ONE coherent set. An index and dumps from
+      // different sources silently drop every taxid one does not know and bias
+      // the background, with no error. So it is all-bundle OR all-user: if ANY of
+      // the three was given explicitly, ALL three must be -- checking only -taxdb
+      // let `FASTAG_TAXONOMY_DIR=/x` + explicit bundled dumps mix a custom index
+      // with bundled dumps through the back door.
+      const bool any_explicit = !taxdb.empty() || !nodes.empty() || !names.empty();
+      if (any_explicit && (taxdb.empty() || nodes.empty() || names.empty()))
       {
-        if (nodes.empty() && !tdir.empty()) nodes = tdir + "/nodes.dmp";
-        if (names.empty() && !tdir.empty()) names = tdir + "/names.dmp";
-      }
-      else if (nodes.empty() || names.empty())
-      {
-        OPENMS_LOG_ERROR << "-taxdb was given explicitly, so -taxonomy_nodes and "
-                         << "-taxonomy_names must be too: the bundled taxonomy "
-                         << "describes only the bundled index, and pairing it with "
-                         << "another index silently drops every taxon it does not "
-                         << "know." << std::endl;
+        OPENMS_LOG_ERROR << "-taxdb, -taxonomy_nodes and -taxonomy_names are one set: "
+                         << "give all three, or none (to use the bundled taxonomy). "
+                         << "Mixing a custom index with another taxonomy silently "
+                         << "drops every taxon the two do not share." << std::endl;
         return ILLEGAL_PARAMETERS;
+      }
+      if (!any_explicit && !tdir.empty())
+      {
+        taxdb = tdir + "/tax_k7.taxdb";
+        nodes = tdir + "/nodes.dmp";
+        names = tdir + "/names.dmp";
       }
       if (species_out.empty())
       {
@@ -1230,15 +1273,28 @@ protected:
         }
         if (taxa.empty()) continue;
         ++n_units;
-        for (uint32_t tx : taxa) ++hits[tx];
+        // Count each NODE at most once per spectrum. Increment every ancestor of
+        // every supported taxon, deduplicated within the spectrum, so `hits` is
+        // already a correct spectrum-count at every rank. Summing leaf counts up
+        // the tree instead (the old rollUp path) counted one spectrum TWICE at a
+        // genus with two supported species -- observed > n_total, p = -inf, q = 0.
+        std::set<uint32_t> spec_nodes;
+        for (uint32_t tx : taxa)
+          for (uint32_t a : tax.lineage(tx)) spec_nodes.insert(a);
+        for (uint32_t a : spec_nodes) ++hits[a];
       }
 
-      // Roll observed hits AND the index breadth up the tree, so each node's
-      // background is the breadth of its whole subtree.
-      std::vector<std::pair<uint32_t, uint64_t>> hit_pairs(hits.begin(), hits.end());
+      // hits is already rolled up (spectrum-deduped per node), so build the
+      // evidence directly -- rolling it again would re-introduce the double count.
+      std::vector<FasTag::NodeEvidence> rolled;
+      rolled.reserve(hits.size());
+      for (const auto& kv : hits) rolled.push_back({kv.first, kv.second, kv.second});
+
+      // The background (index breadth) IS summed up the subtree. This over-counts
+      // a k-mer shared by sibling taxa, which inflates the expectation and makes
+      // calls more CONSERVATIVE -- the safe direction, unlike the observed bug.
       std::vector<std::pair<uint32_t, uint64_t>> post_pairs;
       for (uint32_t tx : idx.taxa()) post_pairs.emplace_back(tx, idx.postings(tx));
-      const auto rolled = tax.rollUp(hit_pairs);
       const auto rolled_post = tax.rollUp(post_pairs);
       std::map<uint32_t, double> bg;
       const double nk = static_cast<double>(std::max<uint64_t>(1, idx.nKmers()));
@@ -1256,15 +1312,27 @@ protected:
       {
         if (c.rank != want_rank) continue;
         const double enr = c.expected > 0 ? c.observed / c.expected : 999.0;
-        char line[512];
-        std::snprintf(line, sizeof line, "%s\t%u\t%s\t%llu\t%.1f\t%.1fx\t%g\t%g\n",
-                      c.rank.c_str(), c.taxid, c.name.c_str(),
+        // rank/name come from the taxdump, which can carry arbitrary text: a tab
+        // or newline in a name would desync columns, and a very long name would
+        // overrun a fixed buffer. Sanitise the free-text fields (the numerics are
+        // bounded) and append to a string so length is never a factor.
+        auto clean = [](const std::string& in) {
+          std::string o; o.reserve(in.size());
+          for (char ch : in) o += (ch == '\t' || ch == '\n' || ch == '\r') ? ' ' : ch;
+          return o;
+        };
+        char num[128];
+        std::snprintf(num, sizeof num, "\t%llu\t%.1f\t%.1fx\t%g\t%g\n",
                       static_cast<unsigned long long>(c.observed), c.expected, enr,
                       c.log_pvalue, c.qvalue);
-        so << line;
+        so << clean(c.rank) << '\t' << c.taxid << '\t' << clean(c.name) << num;
         if (++shown >= 50) break;
       }
+      so.flush();
+      const bool species_ok = static_cast<bool>(so);
       so.close();
+      if (!species_ok)
+        OPENMS_LOG_ERROR << "Failed writing species report to " << species_out << std::endl;
       OPENMS_LOG_INFO << "Species: " << n_units << " spectra contributed taxon evidence; "
                       << "top " << want_rank << " calls -> " << species_out << std::endl;
     }
