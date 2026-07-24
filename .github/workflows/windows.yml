@@ -63,12 +63,13 @@ env:
   # 3.5.0 -- OpenMS-mzPeakRW is written against a commit on
   # feature/dia-pseudospectra -- so shipping the format means moving the base
   # off the release tag.
-  # Bumped 2026-07-24 in lockstep with ci.yml (was bd4b895556 / e233ade948).
+  # Bumped 2026-07-24 in lockstep with ci.yml (was bd4b895556 / e233ade948);
+  # MZPEAK_REF moved to main once PR #1 merged.
   # CONTRIB_REV below deliberately did NOT change: `git ls-tree` on both bases
   # gives the same contrib pointer (186aacfb), so the stale-contrib trap this
   # file documents does not apply to this particular bump -- checked, not assumed.
   OPENMS_BASE_SHA: 9cb5f12394aa5b3e9d243cebf0128e48f9805f66
-  MZPEAK_REF: 7416d2775339c5089ca8d67496e99dff22ffd71a
+  MZPEAK_REF: c37237c5a02becd0ea65db615404fdf426b384e3
   # The contrib commit the BASE ABOVE pins as a submodule, read directly out of
   # it rather than assumed: `git ls-tree bd4b895556 -- contrib` in a local
   # OpenMS checkout.

@@ -66,12 +66,12 @@ env:
   # four files upstream still lacks. Keeping the old base would have kept
   # re-applying twelve now-identical files over it.
   OPENMS_BASE_SHA: 9cb5f12394aa5b3e9d243cebf0128e48f9805f66
-  # okohlbacher/OpenMS-mzPeakRW, fix branch rebased onto the base above. Still
-  # not main: main has the bugs found while integrating this (PR #1) -- Arrow
-  # casts that silently drop every precursor, a header that never installs, and
-  # a transform() that materialises the whole run. Move this to main's SHA once
-  # that PR merges.
-  MZPEAK_REF: 7416d2775339c5089ca8d67496e99dff22ffd71a
+  # okohlbacher/OpenMS-mzPeakRW, now MAIN: PR #1 merged, so main carries the
+  # Arrow/parquet cast fixes, the installed header and the streaming transform()
+  # that used to live only on the fix branch. Still pinned by SHA rather than
+  # tracking the branch -- a moving ref on either side of this two-repo
+  # dependency would silently change what a release contains.
+  MZPEAK_REF: c37237c5a02becd0ea65db615404fdf426b384e3
 
 jobs:
   # ------------------------------------------------------- patched OpenMS
