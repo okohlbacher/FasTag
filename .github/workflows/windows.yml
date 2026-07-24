@@ -63,8 +63,12 @@ env:
   # 3.5.0 -- OpenMS-mzPeakRW is written against a commit on
   # feature/dia-pseudospectra -- so shipping the format means moving the base
   # off the release tag.
-  OPENMS_BASE_SHA: bd4b89555629d68b431b189a4c841efbcc4dfeea
-  MZPEAK_REF: e233ade94856aec9b5b7c61c344614c16aec7084
+  # Bumped 2026-07-24 in lockstep with ci.yml (was bd4b895556 / e233ade948).
+  # CONTRIB_REV below deliberately did NOT change: `git ls-tree` on both bases
+  # gives the same contrib pointer (186aacfb), so the stale-contrib trap this
+  # file documents does not apply to this particular bump -- checked, not assumed.
+  OPENMS_BASE_SHA: 9cb5f12394aa5b3e9d243cebf0128e48f9805f66
+  MZPEAK_REF: 7416d2775339c5089ca8d67496e99dff22ffd71a
   # The contrib commit the BASE ABOVE pins as a submodule, read directly out of
   # it rather than assumed: `git ls-tree bd4b895556 -- contrib` in a local
   # OpenMS checkout.
@@ -540,6 +544,19 @@ jobs:
       - name: Smoke-test the binary
         shell: bash
         run: ./fastag/build/FasTag.exe --help
+
+      - name: Verify the built binary advertises mzPeak
+        shell: bash
+        run: |
+          # The whole reason this job builds OpenMS from source (overlaying
+          # OpenMS-mzPeakRW) is mzPeak; assert the shipped .exe actually lists it
+          # among -in's valid formats, so a regression fails the release build
+          # instead of shipping a Windows binary that rejects .mzpeak.
+          if ! ./fastag/build/FasTag.exe --help 2>&1 | grep -E "valid formats.*mzpeak"; then
+            echo "::error::built FasTag.exe does not advertise mzpeak input."
+            ./fastag/build/FasTag.exe --help 2>&1 | grep -i "valid formats" || true
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

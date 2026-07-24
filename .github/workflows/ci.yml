@@ -59,12 +59,19 @@ env:
   # OpenMS/OpenMS, the commit OpenMS-mzPeakRW's files are written against.
   # Reachable from feature/dia-pseudospectra, NOT from develop -- a plain
   # `git fetch <sha>` is refused by GitHub, hence the --deepen dance below.
-  OPENMS_BASE_SHA: bd4b89555629d68b431b189a4c841efbcc4dfeea
-  # okohlbacher/OpenMS-mzPeakRW. Currently the fix branch, not main: main still
-  # has the two bugs found while integrating this (PR #1) -- Arrow casts that
-  # silently drop every precursor, and a header that never installs. Move this
-  # to main's SHA once that PR merges.
-  MZPEAK_REF: e233ade94856aec9b5b7c61c344614c16aec7084
+  #
+  # Bumped 2026-07-24 from bd4b895556 (13 commits back). Upstream absorbed the
+  # bulk of mzPeak in between -- MzPeakFile load/store/transform, the
+  # FileHandler/FileTypes wiring, the class test -- so the overlay shrank to the
+  # four files upstream still lacks. Keeping the old base would have kept
+  # re-applying twelve now-identical files over it.
+  OPENMS_BASE_SHA: 9cb5f12394aa5b3e9d243cebf0128e48f9805f66
+  # okohlbacher/OpenMS-mzPeakRW, fix branch rebased onto the base above. Still
+  # not main: main has the bugs found while integrating this (PR #1) -- Arrow
+  # casts that silently drop every precursor, a header that never installs, and
+  # a transform() that materialises the whole run. Move this to main's SHA once
+  # that PR merges.
+  MZPEAK_REF: 7416d2775339c5089ca8d67496e99dff22ffd71a
 
 jobs:
   # ------------------------------------------------------- patched OpenMS
@@ -490,9 +497,41 @@ jobs:
           fi
           grep "FasTag: OpenMP" configure.log
 
+      - name: Verify mzPeak support was enabled
+        shell: bash -el {0}
+        run: |
+          # The whole reason OpenMS is built from source here is mzPeak; a release
+          # that silently drops it defeats the purpose. The openms job already
+          # asserts the *install* has the MZPEAK enum and store(); this asserts the
+          # thing that actually ships -- FasTag was CONFIGURED with mzPeak on.
+          #
+          # Same shape as the OpenMP gate: check the property that matters
+          # (configure decided mzPeak is available), not a proxy. A regression --
+          # a broken install, a detection change -- fails the release build here
+          # instead of shipping an mzML-only binary that reports .mzpeak as
+          # "type: unknown" to a user.
+          if ! grep -q "FasTag: mzPeak input available" configure.log; then
+            echo "::error::mzPeak support was NOT enabled. The release must read .mzpeak."
+            grep -i "mzpeak" configure.log || echo "(no mzPeak line at all)"
+            exit 1
+          fi
+          grep "FasTag: mzPeak input available" configure.log
+
       - name: Build
         shell: bash -el {0}
         run: cmake --build build --parallel
+
+      - name: Verify the built binary advertises mzPeak
+        shell: bash -el {0}
+        run: |
+          # Belt-and-braces beyond the configure-time gate: the binary itself must
+          # list mzpeak among -in's valid formats. Catches anything between
+          # configure and link that could drop the format.
+          if ! ./build/FasTag --help 2>&1 | grep -E "valid formats.*mzpeak"; then
+            echo "::error::built FasTag does not advertise mzpeak input."
+            ./build/FasTag --help 2>&1 | grep -i "valid formats" || true
+            exit 1
+          fi
 
       - name: Test
         shell: bash -el {0}
