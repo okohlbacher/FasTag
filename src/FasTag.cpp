@@ -33,6 +33,7 @@
 #include <memory>
 #include <algorithm>
 #include <iterator>
+#include <atomic>
 #include <random>
 #include <set>
 #include <vector>
@@ -238,6 +239,14 @@ protected:
     setMaxFloat_("subsample_fraction", 1.0);
     registerIntOption_("subsample_seed", "<n>", 1, "Seed for -subsample_* selection", false);
     setMinInt_("subsample_seed", 0);
+
+    // Machine-readable progress for a GUI/pipeline driving FasTag. Off by
+    // default so the CLI stays quiet; when set, emit periodic lines to stderr:
+    //   FASTAG_PROGRESS done=<n> total=<n>
+    // total is the spectrum count for indexed input, or 0 when it is not known
+    // ahead of time (the push-based mzPeak path streams and cannot count first).
+    // Emitted from a single thread per update, so lines never interleave.
+    registerFlag_("progress", "Emit 'FASTAG_PROGRESS done=<n> total=<n>' lines to stderr for a GUI progress bar");
 
     // Taxonomic / species detection: throw the tags at a prebuilt tag->taxon
     // index (buildtaxdb) and infer the taxa present by lowest-common-ancestor
@@ -707,6 +716,31 @@ protected:
     // The vectors grow HERE, outside the parallel region. Growing them inside
     // would be a data race, and presizing from setExpectedSize would make
     // correctness depend on a call the interface only recommends.
+    // Progress reporting (opt-in via -progress), shared across both input paths.
+    // One atomic counter; the single thread that observes each step boundary
+    // emits one line under a critical section, so lines never interleave. total
+    // is the spectrum count for indexed input, or 0 (unknown) for the streaming
+    // mzPeak path, which cannot be counted before it is read.
+    const bool emit_progress = getFlag_("progress");
+    std::atomic<long long> progress_done{0};
+    const long long progress_total = mzpeak_in ? 0 : static_cast<long long>(n_spec);
+    // ~200 updates over a known total (min every spectrum for small files), or
+    // every 128 spectra when the total is unknown: bounded line rate at any size.
+    const long long progress_step =
+        progress_total <= 0 ? 128 : (progress_total > 200 ? progress_total / 200 : 1);
+    auto tick = [&]()
+    {
+      if (!emit_progress) return;
+      const long long d = ++progress_done;
+      // Emit the first tick immediately (so a GUI shows activity at once), then
+      // at each step boundary, then exactly at completion for a known total.
+      if (d == 1 || d % progress_step == 0 || d == progress_total)
+      {
+#pragma omp critical(fastag_progress)
+        std::cerr << "FASTAG_PROGRESS done=" << d << " total=" << progress_total << std::endl;
+      }
+    };
+
     auto flush_chunk = [&](std::vector<MSSpectrum>& buf)
     {
       if (buf.empty()) return;
@@ -721,6 +755,7 @@ protected:
       {
         const size_t tid = static_cast<size_t>(omp_get_thread_num());
         record(base + static_cast<size_t>(j), tag_one(buf[j], tid), buf[j]);
+        tick();
       }
       buf.clear();
     };
@@ -766,12 +801,13 @@ protected:
 #pragma omp for schedule(dynamic, 64)
       for (SignedSize i = 0; i < n_spec; ++i)
       {
-        if (!sample_mask.empty() && !sample_mask[static_cast<size_t>(i)]) continue;
+        if (!sample_mask.empty() && !sample_mask[static_cast<size_t>(i)]) { tick(); continue; }
         const MSSpectrum loaded = streaming ? reader->getSpectrum(static_cast<Size>(i))
                                             : MSSpectrum();
         const MSSpectrum& spec = streaming ? loaded : exp[static_cast<Size>(i)];
         const size_t tid = static_cast<size_t>(omp_get_thread_num());
         record(static_cast<size_t>(i), tag_one(spec, tid), spec);
+        tick();
       }
     }
     }

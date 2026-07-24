@@ -8,3 +8,5 @@ build-mzpeak/
 build-diag/
 build-inst/
 build-f4/
+build-main/
+build-rel/
