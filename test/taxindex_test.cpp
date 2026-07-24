@@ -10,6 +10,7 @@
 #include <cstdint>
 
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -117,6 +118,44 @@ int main()
     check(idx3.nKmers() == idx.nKmers(), "mapped re-save keeps kmer count");
     std::remove(path.c_str());
     std::remove(path2.c_str());
+  }
+
+  // Corruption rejection: a v2 file must fail to LOAD, not crash, when
+  // truncated or given a hostile header (the case an adversarial review found
+  // could read past the mapping). Realistic because the ~1 GB index is a
+  // downloaded asset, so a partial download is ordinary corruption.
+  {
+    std::string good = std::string(std::tmpnam(nullptr)) + ".ftx2";
+    std::string err;
+    check(idx.save(good, &err), "save for corruption test: " + err);
+
+    // Read the good file's bytes.
+    std::ifstream gi(good, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(gi)), std::istreambuf_iterator<char>());
+    gi.close();
+
+    auto writeAndTryLoad = [&](const std::string& data, const char* what) {
+      std::string p = std::string(std::tmpnam(nullptr)) + ".ftx2";
+      { std::ofstream o(p, std::ios::binary); o.write(data.data(), static_cast<std::streamsize>(data.size())); }
+      TaxIndex bad;
+      std::string e;
+      check(!bad.load(p, &e), std::string("rejects ") + what);
+      std::vector<uint32_t> out;
+      bad.lookup("AAAAAAAA", out);  // must be safe on a failed load, not a crash
+      check(out.empty(), std::string("no lookup after rejected ") + what);
+      std::remove(p.c_str());
+    };
+
+    if (bytes.size() > 100) writeAndTryLoad(bytes.substr(0, bytes.size() / 2), "a truncated file");
+    writeAndTryLoad(bytes.substr(0, 40), "a header-only file");
+    writeAndTryLoad("FTX2\x02\x00\x00\x00", "a 8-byte stub");
+    writeAndTryLoad("not an index at all", "a non-index file");
+    // Hostile header: huge n_kmers must be rejected by the bounds check, not wrap.
+    std::string hostile = bytes.substr(0, 40);
+    for (int i = 16; i < 24; ++i) hostile[i] = static_cast<char>(0xFF);  // n_kmers = UINT64_MAX
+    writeAndTryLoad(hostile, "a hostile huge-count header");
+
+    std::remove(good.c_str());
   }
 
   if (failures == 0) std::cout << "taxindex_test: all checks passed\n";

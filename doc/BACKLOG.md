@@ -360,7 +360,13 @@ research project.
   the old 17-taxon set only looked sharper because the competitors were absent.
 
 ### Still open (unchanged from v0.16.0)
-- F13: ProForma column shipped (-proforma); mzTab / mzIdentML / USI still open.
+- F13: ProForma column shipped (-proforma) and regression-tested. mzTab /
+  mzIdentML / USI are PSM/identification-centric formats -- they describe
+  peptide-spectrum MATCHES, which a bare tag is not (a tag is a partial read
+  with mass gaps, no assigned peptide). They fit downstream of a search step,
+  not FasTag's raw output. ProForma is the standard that actually models a tag,
+  so F13 is done to the extent that is meaningful for a tagger; the rest is
+  deliberately out of scope, not merely unfinished.
 - F6 multi-length tags: DONE via -extension (see the F-table).
 - GUI P2-P6; release signing (awaits secrets); F4 calibrated q-value (research).
 - 1(b) embed-the-index-in-every-tarball is NOT done: the index ships as a single
