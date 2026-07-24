@@ -23,6 +23,7 @@
 
 #include "FasTagger.h"
 #include "FastaFilter.h"
+#include "Proforma.h"
 #include "SpectrumSampler.h"
 #include "TaxIndex.h"
 #include "TaxStats.h"
@@ -344,6 +345,10 @@ protected:
     // ahead of time (the push-based mzPeak path streams and cannot count first).
     // Emitted from a single thread per update, so lines never interleave.
     registerFlag_("progress", "Emit 'FASTAG_PROGRESS done=<n> total=<n>' lines to stderr for a GUI progress bar");
+
+    // ProForma 2.0 rendering of each tag, appended as a trailing column. Off by
+    // default so the TSV schema is unchanged unless asked for. See Proforma.h.
+    registerFlag_("proforma", "Append a ProForma 2.0 column ([+nterm]-SEQ-[+cterm]) for each tag");
 
     // Taxonomic / species detection: throw the tags at a prebuilt tag->taxon
     // index (buildtaxdb) and infer the taxa present by lowest-common-ancestor
@@ -735,7 +740,9 @@ protected:
 
     const FasTag::Tables tables(p);
     std::ofstream tsv(out.c_str());
-    tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tgapped\tevalue\tmin_conf\tmean_conf\tfasta_hit\n";
+    const bool want_proforma = getFlag_("proforma");
+    tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tgapped\tevalue\tmin_conf\tmean_conf\tfasta_hit"
+        << (want_proforma ? "\tproforma" : "") << "\n";
 
     PeakMap kept;
     if (streaming)
@@ -796,39 +803,33 @@ protected:
           hit = (h == FasTag::FastaFilter::Hit::Forward) ? "fwd" : "rev";
         }
         ++per_thread_rep[tid];
-        char line[512];
-        // Flanking masses at 4 decimals (0.1 mDa), not %g.
+
+        // Append the row field by field to buf. This replaces a pair of fixed
+        // 512-byte snprintf format strings whose heap-fallback branch had one
+        // COLUMN FEWER (it dropped min_conf/mean_conf), so a tag on a spectrum
+        // with a very long native ID silently emitted a malformed row. A string
+        // grows on its own, so there is one code path and no fallback to drift.
         //
-        // %g gives 6 significant digits, so a 1234.56789 Da flank prints as
-        // 1234.57 and a 2500 Da flank keeps a single decimal -- coarser than the
-        // tolerance the tag was found with, and these are precisely the values a
-        // downstream search uses as a precursor constraint. E-values keep %g,
-        // where relative precision is what matters.
-        const int m = std::snprintf(line, sizeof line,
-                                    "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\t%g\t%.3f\t%.3f\t%s\n",
-                                    spec.getNativeID().c_str(), t.seq.c_str(), t.n_res,
-                                    t.charge, t.nterm_mass, t.cterm_mass,
-                                    t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue,
-                                    t.min_conf, t.mean_conf, hit);
-        // snprintf returns the length it WOULD have written, which a long native
-        // ID can push past the buffer. Appending that many bytes reads past
-        // `line`. Clamp, and re-format on the heap rather than emit a truncated
-        // row -- half a row is a corrupt TSV, not a cosmetic problem.
-        if (m < 0) continue;
-        if (static_cast<size_t>(m) < sizeof line)
-        {
-          buf.append(line, static_cast<size_t>(m));
-        }
-        else
-        {
-          std::vector<char> big(static_cast<size_t>(m) + 1);
-          const int m2 = std::snprintf(big.data(), big.size(),
-                                       "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\t%g\t%s\n",
-                                       spec.getNativeID().c_str(), t.seq.c_str(), t.n_res,
-                                       t.charge, t.nterm_mass, t.cterm_mass,
-                                       t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue, hit);
-          if (m2 > 0) buf.append(big.data(), static_cast<size_t>(m2));
-        }
+        // Flanking masses at 4 decimals (0.1 mDa), not %g: %g's 6 significant
+        // digits are coarser than the tolerance the tag was found with, and
+        // these are exactly the values a downstream search uses as a precursor
+        // constraint. E-values keep %g, where relative precision is what matters.
+        char num[48];
+        auto f = [&](const char* fmt, auto v) { std::snprintf(num, sizeof num, fmt, v); buf += num; };
+        buf += spec.getNativeID(); buf += '\t';
+        buf += t.seq;              buf += '\t';
+        f("%zu", t.n_res);         buf += '\t';
+        f("%d", t.charge);         buf += '\t';
+        f("%.4f", t.nterm_mass);   buf += '\t';
+        f("%.4f", t.cterm_mass);   buf += '\t';
+        f("%d", t.extended ? 1 : 0); buf += '\t';
+        f("%d", t.gapped ? 1 : 0); buf += '\t';
+        f("%g", t.evalue);         buf += '\t';
+        f("%.3f", t.min_conf);     buf += '\t';
+        f("%.3f", t.mean_conf);    buf += '\t';
+        buf += hit;
+        if (want_proforma) { buf += '\t'; buf += FasTag::toProforma(t.seq, t.nterm_mass, t.cterm_mass); }
+        buf += '\n';
       }
       return buf;
     };
