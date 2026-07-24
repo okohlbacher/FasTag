@@ -344,7 +344,14 @@ std::vector<TaxonCall> Taxonomy::call(
     out.push_back(c);
   }
   std::sort(out.begin(), out.end(), [](const TaxonCall& a, const TaxonCall& b) {
+    // log_pvalue BEFORE observed as the q-tie breaker. The strongest taxa all
+    // underflow q to exactly 0 (a double cannot hold exp(-3800)), so ranking by
+    // q alone collapses them into a tie and the old secondary key -- observed --
+    // decided the order, discarding the actual significance. log_pvalue is
+    // computed in log space and never underflows, so it orders the top hits the
+    // way q would if it had the range.
     if (a.qvalue != b.qvalue) return a.qvalue < b.qvalue;
+    if (a.log_pvalue != b.log_pvalue) return a.log_pvalue < b.log_pvalue;
     if (a.observed != b.observed) return a.observed > b.observed;
     return a.taxid < b.taxid;
   });

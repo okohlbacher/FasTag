@@ -7,6 +7,8 @@
 
 #include "TaxIndex.h"
 
+#include <cstdint>
+
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -39,48 +41,82 @@ int main()
   idx.build(e, tax, /*k=*/8);
   check(idx.k() == 8, "k stored");
 
+  // lookup() fills a caller buffer: the v2 image stores taxon INDICES, so there
+  // is no vector in the file to hand back a reference to.
+  std::vector<uint32_t> s;
+
   // AAAAAAAA is in taxa 10 and 20.
-  {
-    const auto& s = idx.lookup("AAAAAAAA");
-    check(s.size() == 2 && s[0] == 10 && s[1] == 20, "shared 8-mer maps to both taxa, sorted");
-  }
+  idx.lookup("AAAAAAAA", s);
+  check(s.size() == 2 && s[0] == 10 && s[1] == 20, "shared 8-mer maps to both taxa, sorted");
   // CDEFGHKL only in taxon 10.
-  check(idx.lookup("CDEFGHKL").size() == 1 && idx.lookup("CDEFGHKL")[0] == 10, "unique 8-mer maps to one taxon");
+  idx.lookup("CDEFGHKL", s);
+  check(s.size() == 1 && s[0] == 10, "unique 8-mer maps to one taxon");
   // MNPQRSTV only in taxon 30.
-  check(idx.lookup("MNPQRSTV") == std::vector<uint32_t>{30}, "taxon-30 8-mer");
-  // I/L folding: querying with I must hit the L-containing k-mer.
-  check(idx.lookup("MNPQRSTV") == idx.lookup("MNPQRSTV"), "sanity");
+  idx.lookup("MNPQRSTV", s);
+  check(s == std::vector<uint32_t>{30}, "taxon-30 8-mer");
   {
-    // GATSDGKL is in p30a; query the I/L-folded form (no I here, but exercise fold on the query side)
     const std::string q = TaxIndex::fold("GATSDGKL");
-    check(idx.lookup(q).size() == 1 && idx.lookup(q)[0] == 30, "internal 8-mer of p30a");
+    idx.lookup(q, s);
+    check(s.size() == 1 && s[0] == 30, "internal 8-mer of p30a");
   }
   // Absent k-mer -> empty.
-  check(idx.lookup("WWWWWWWW").empty(), "absent k-mer is empty");
+  idx.lookup("WWWWWWWW", s);
+  check(s.empty(), "absent k-mer is empty");
+  // A k-mer containing a residue outside the folded 19-letter alphabet has no
+  // code at all and must not match anything.
+  idx.lookup("AAAAAAAX", s);
+  check(s.empty(), "k-mer with an ambiguous residue is empty");
+  // Wrong length is rejected rather than silently truncated.
+  idx.lookup("AAAA", s);
+  check(s.empty(), "wrong-length query is empty");
 
-  // Postings: taxon 10 appears in every distinct 8-mer of p10a it carries.
-  // p10a = AAAAAAAACDEFGHKL (16 residues) -> 9 windows; taxon 20's A-run overlaps
-  // only the AAAAAAAA k-mer, so postings(20) counts the distinct 8-mers of p20a.
   check(idx.postings(10) >= 1 && idx.postings(20) >= 1 && idx.postings(30) >= 1, "all taxa have postings");
-  // The shared 8-mer contributes to both 10 and 20, so nKmers < sum of postings.
   check(idx.nKmers() > 0, "index non-empty");
   {
     auto t = idx.taxa();
     check(t.size() == 3 && t[0] == 10 && t[1] == 20 && t[2] == 30, "taxa() lists all three, sorted");
   }
 
-  // Save / load round-trip.
+  // base-19 packing: distinct k-mers must get distinct codes, and anything with
+  // an out-of-alphabet residue must be rejected.
+  check(TaxIndex::encode("AAAAAAAA", 8) != TaxIndex::encode("AAAAAAAC", 8), "codes are distinct");
+  check(TaxIndex::encode("AAAAAAAX", 8) == UINT64_MAX, "ambiguous residue has no code");
+  check(TaxIndex::encode("AAAAAAAI", 8) == TaxIndex::encode("AAAAAAAL", 8), "I folds onto L in the code");
+  check(TaxIndex::keyBytes(7) == 4 && TaxIndex::keyBytes(8) == 5, "key width follows 19^k");
+
+  // Save / load round-trip -- this is the v2 packed+mapped path.
   {
-    std::string path = std::string(std::tmpnam(nullptr)) + ".ftxi";
+    std::string path = std::string(std::tmpnam(nullptr)) + ".ftx2";
     std::string err;
     check(idx.save(path, &err), "save: " + err);
     TaxIndex idx2;
     check(idx2.load(path, &err), "load: " + err);
     check(idx2.k() == idx.k(), "k survives round-trip");
-    check(idx2.lookup("AAAAAAAA") == idx.lookup("AAAAAAAA"), "shared set survives round-trip");
+
+    std::vector<uint32_t> a, b;
+    idx.lookup("AAAAAAAA", a); idx2.lookup("AAAAAAAA", b);
+    check(a == b, "shared set survives round-trip");
+    idx.lookup("MNPQRSTV", a); idx2.lookup("MNPQRSTV", b);
+    check(a == b, "singleton set survives round-trip");
+    idx2.lookup("WWWWWWWW", b);
+    check(b.empty(), "absent k-mer still absent after round-trip");
     check(idx2.postings(10) == idx.postings(10), "postings survive round-trip");
+    check(idx2.postings(20) == idx.postings(20), "postings(20) survives round-trip");
     check(idx2.nKmers() == idx.nKmers(), "kmer count survives round-trip");
+    check(idx2.taxa() == idx.taxa(), "taxa survive round-trip");
+
+    // Re-saving a MAPPED index must reproduce it exactly (the non-legacy save path).
+    std::string path2 = std::string(std::tmpnam(nullptr)) + ".ftx2";
+    check(idx2.save(path2, &err), "re-save mapped: " + err);
+    TaxIndex idx3;
+    check(idx3.load(path2, &err), "re-load: " + err);
+    idx3.lookup("AAAAAAAA", b);
+    check(a != b || true, "");
+    idx.lookup("AAAAAAAA", a);
+    check(a == b, "mapped re-save round-trips");
+    check(idx3.nKmers() == idx.nKmers(), "mapped re-save keeps kmer count");
     std::remove(path.c_str());
+    std::remove(path2.c_str());
   }
 
   if (failures == 0) std::cout << "taxindex_test: all checks passed\n";

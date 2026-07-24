@@ -39,7 +39,9 @@ int main(int argc, char** argv)
   const std::string dir = argv[1];
   const std::string out = argv[2];
   const int k = argc > 3 ? std::atoi(argv[3]) : 7;
-  if (k < 3 || k > 30) { std::cerr << "k out of range (3..30)\n"; return 2; }
+  // Upper bound is TaxIndex::MAX_K: base-19 codes overflow a uint64 beyond it.
+  if (k < 3 || k > FasTag::TaxIndex::MAX_K)
+  { std::cerr << "k out of range (3.." << FasTag::TaxIndex::MAX_K << ")\n"; return 2; }
 
   std::vector<FASTAFile::FASTAEntry> entries;
   std::vector<uint32_t> taxids;
