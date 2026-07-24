@@ -74,7 +74,10 @@ double logNormalUpperTail(double z) {
   // Asymptotic Mills-ratio expansion: Phi_bar(z) ~ phi(z)/z * (1 - 1/z^2 + 3/z^4).
   double z2 = z * z;
   double corr = 1.0 - 1.0 / z2 + 3.0 / (z2 * z2);
-  return -0.5 * z2 - std::log(z) - 0.5 * std::log(2.0 * M_PI) + std::log(corr);
+  // 2*pi as a literal: M_PI is a POSIX/GNU extension, not standard C++, and MSVC
+  // does not define it without _USE_MATH_DEFINES -- which broke the Windows build.
+  constexpr double TWO_PI = 6.283185307179586476925286766559;
+  return -0.5 * z2 - std::log(z) - 0.5 * std::log(TWO_PI) + std::log(corr);
 }
 
 }  // namespace
