@@ -628,6 +628,39 @@ namespace FasTag
       }
       t.p_intensity = tab.intensityP(k, static_cast<int>(s.spec.size()), ranksum);
 
+      // Per-edge confidence: how well each residue is actually supported.
+      //
+      // The E-value scores the whole tag; this localises the weak link. Each edge
+      // i (peaks[i]..peaks[i+1]) carries one residue, or two for a gap. Its
+      // confidence multiplies two independent things that both have to hold:
+      //   mz_fit   -- the observed peak gap matches the residue/pair mass, falling
+      //               linearly from 1 at a perfect fit to 0 at the tolerance;
+      //   int_fit  -- BOTH endpoint peaks are intense (1 - the worse endpoint's
+      //               rank fraction), so a residue resting on a near-noise peak is
+      //               marked weak even if its mass fits.
+      // min over edges is the residue most likely wrong; mean is the overall.
+      {
+        const double npk = static_cast<double>(std::max<size_t>(1, s.spec.size()));
+        double conf_sum = 0.0, conf_min = 1.0;
+        for (int i = 0; i + 1 < k; ++i)
+        {
+          const double gap = (s.spec[peaks[static_cast<size_t>(i) + 1]].getMZ()
+                              - s.spec[peaks[static_cast<size_t>(i)]].getMZ()) * charge;
+          const double expect = stepMass(A, path[static_cast<size_t>(i)]);
+          const double etol = tolAt(p, s.spec[peaks[static_cast<size_t>(i) + 1]].getMZ()) * charge;
+          const double mz_fit = etol > 0 ? std::max(0.0, 1.0 - std::fabs(gap - expect) / etol) : 0.0;
+          const double worse_rank = std::max(s.rank[peaks[static_cast<size_t>(i)]],
+                                             s.rank[peaks[static_cast<size_t>(i) + 1]]);
+          const double int_fit = std::max(0.0, 1.0 - worse_rank / npk);
+          const double c = mz_fit * int_fit;
+          conf_sum += c;
+          conf_min = std::min(conf_min, c);
+        }
+        const int n_edge = k - 1;
+        t.min_conf = n_edge > 0 ? static_cast<float>(conf_min) : 1.0f;
+        t.mean_conf = n_edge > 0 ? static_cast<float>(conf_sum / n_edge) : 1.0f;
+      }
+
       // Probability of seeing at least this many complemented peaks among k drawn
       // from the spectrum. Dropped when the spectrum has no complements at all.
       const size_t zi = static_cast<size_t>(charge);

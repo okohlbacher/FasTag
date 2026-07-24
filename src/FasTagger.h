@@ -103,6 +103,13 @@ namespace FasTag
     int    charge = 1;          ///< fragment charge the tag was read at
     double p_intensity = 1, p_mzfidelity = 1, p_complement = 1;
     double evalue = 1;          ///< combined p-value x tags enumerated
+    /// Per-edge confidence in [0,1], summarised. Each edge (one residue, or two
+    /// for a gap) scores m/z fit x endpoint intensity; min_conf is the weakest
+    /// edge (the residue most likely wrong), mean_conf the average. The E-value
+    /// is the primary, validated tag confidence; these localise WHERE a tag is
+    /// weak, which the single E-value cannot.
+    float  min_conf = 1.0f;
+    float  mean_conf = 1.0f;
     bool   extended = false;
     bool   gapped = false;      ///< crossed a missing peak; two residues are a
                                 ///< mass-only inference, not two observed steps

@@ -510,7 +510,7 @@ protected:
 
     const FasTag::Tables tables(p);
     std::ofstream tsv(out.c_str());
-    tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tgapped\tevalue\tfasta_hit\n";
+    tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tgapped\tevalue\tmin_conf\tmean_conf\tfasta_hit\n";
 
     PeakMap kept;
     if (streaming)
@@ -580,10 +580,11 @@ protected:
         // downstream search uses as a precursor constraint. E-values keep %g,
         // where relative precision is what matters.
         const int m = std::snprintf(line, sizeof line,
-                                    "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\t%g\t%s\n",
+                                    "%s\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\t%g\t%.3f\t%.3f\t%s\n",
                                     spec.getNativeID().c_str(), t.seq.c_str(), t.n_res,
                                     t.charge, t.nterm_mass, t.cterm_mass,
-                                    t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue, hit);
+                                    t.extended ? 1 : 0, t.gapped ? 1 : 0, t.evalue,
+                                    t.min_conf, t.mean_conf, hit);
         // snprintf returns the length it WOULD have written, which a long native
         // ID can push past the buffer. Appending that many bytes reads past
         // `line`. Clamp, and re-format on the heap rather than emit a truncated
