@@ -186,6 +186,15 @@ relative to RAM; see [doc/BACKLOG-mzpeak.md](doc/BACKLOG-mzpeak.md).
 | `-isobaric_tolerance <value>` | 0.04 | Isobaric residue-pair substitution tolerance when matching `-fasta`; 0 requires exact strings |
 | `-min_filter_length <n>` | 0 | Ignore tags shorter than this when matching `-fasta`; 0 derives a floor from database size |
 | `-orientation <both\|forward>` | both | Also match a tag reversed (b-ion reading), or only as written |
+| `-proforma` | off | Append a ProForma 2.0 column for each tag (see Output) |
+| `-progress` | off | Emit `FASTAG_PROGRESS done=<n> total=<n>` on stderr for a progress bar |
+| `-species` | off | Infer taxa from the tags (see Species detection) |
+| `-taxdb / -taxonomy_nodes / -taxonomy_names <file>` | bundled | The index and NCBI dumps for `-species`; give all three or none |
+| `-species_out <file>` | `<out>.species.tsv` | Ranked-taxa output |
+| `-species_rank <rank>` | genus | NCBI rank to report (genus, family, …) |
+| `-species_min_len <n>` | 0 | Ignore tags shorter than this for taxonomy; 0 uses the index k |
+| `-subsample_spectra <n>` / `-subsample_fraction <f>` | 0 | Tag only a random subset (count or fraction); 0 = all |
+| `-fixed_modifications` / `-variable_modifications <mods>` | Carbamidomethyl (C) fixed | Modifications by OpenMS/UniMod name, e.g. `'TMT6plex (K)'`, `'Phospho (S)'` |
 
 Plus the standard OpenMS TOPP options: `-threads <n>` (parallelism — the
 core performance lever), `-ini <file>` / `-write_ini <file>` (parameter files),
@@ -210,6 +219,60 @@ incorrect ones (~0.45 vs ~0.17 median). A calibrated per-tag *q-value/FDR* is
 deliberately **not** emitted: a defensible null has to reproduce the chimeric
 false tags real spectra generate, which a single-spectrum decoy does not — see
 [doc/BACKLOG.md](doc/BACKLOG.md).
+
+### ProForma output
+
+`-proforma` appends a [ProForma 2.0](https://github.com/HUPO-PSI/ProForma) column
+so downstream tools can consume a tag without a bespoke parser. Each tag renders
+as `<[fixed-mods]>[+nterm]-RESIDUES-[+cterm]`: the flanks as terminal mass tags
+(ProForma has no dedicated "mass gap of unknown sequence at a terminus"), fixed
+modifications as a global prefix (`<[Carbamidomethyl]@C>`), and the I/L residue
+as `J` because FasTag folds I onto L and cannot tell them apart. Off by default;
+the TSV schema is unchanged unless asked for.
+
+## Species detection
+
+`-species` infers which taxa a run's tags come from — a native tag→taxon
+classifier, no database search. Off by default (it loads a k-mer index that
+costs seconds and ~1 GB), and a complete request on its own:
+
+```bash
+FasTag -in run.mzML -out run.tags.tsv -species -tag_length 7
+```
+
+Each tag's k-mers are looked up in a reduced reference index; the taxa carrying
+the whole tag vote, votes roll up the NCBI taxonomy, and each node is tested
+against its background breadth. Output is a ranked TSV
+(`rank taxid name observed expected enrichment log_pvalue qvalue`), one call per
+taxon at `-species_rank` (genus by default).
+
+`-tag_length` must be **at least the index k** (7) — a shorter tag cannot be
+looked up, and FasTag refuses the run up front rather than writing an empty
+report. Pair `-species` with `-subsample_fraction 0.1` for a fast call on a large
+run.
+
+**Get the index.** The pruned taxonomy dumps ship inside every release tarball;
+the ~1 GB k-mer index is a separate asset (platform-independent). Download
+`FasTag-taxonomy-k7.tar.gz` from the release and extract it into the FasTag
+directory:
+
+```bash
+tar xzf FasTag-taxonomy-k7.tar.gz -C /path/to/FasTag/   # -> share-FasTag-taxonomy/
+```
+
+The index is a bit-packed, memory-mapped format (`FTX2`): a 50-taxon index is
+~1 GB on disk and **under 1 GB resident**, and loads instantly. Rebuild it from
+`data/taxonomy/reference-set.tsv` with `tools/fetch_reference_set.py` +
+`buildtaxdb` (deterministic, so a checksum verifies a download).
+
+**Read it as genus/family, not species.** The reference set is ~50
+representative proteomes (model organisms, MS contaminants, common pathogens, gut
+microbiome, archaea), one per genus. Short peptide 7-mers cannot separate close
+relatives: on a human sample *Homo* ranks first but *Macaca*, *Bos*, *Sus* follow
+within a few percent, because mammalian proteomes share most 7-mers. `q` is a
+ranking aid, not a calibrated FDR (the chimeric-null problem again). Reagent
+genera (*Bos*, *Sus*, *Oryctolagus*…) appear in almost any run — the GUI flags
+them; in the TSV they are simply present.
 
 ## Demo data
 
