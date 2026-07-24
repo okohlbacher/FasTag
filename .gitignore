@@ -13,3 +13,6 @@ build-rel/
 
 # local dev symlinks to a taxonomy index (see data/taxonomy/README.md)
 /share/
+
+# ...but the species reference-set manifest is source, not a test output
+!data/taxonomy/reference-set.tsv

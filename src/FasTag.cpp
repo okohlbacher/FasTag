@@ -73,15 +73,20 @@ namespace
   /// Exists so the tag-length precondition can be checked BEFORE tagging.
   /// Loading the index to learn k costs seconds and ~2 GB, which is exactly the
   /// work we want to refuse to waste.
-  /// Layout (TaxIndex::save): "FTXI" | uint32 version | uint32 k | uint64 n.
+  ///
+  /// Both index versions put k at the same place: magic(4) | u32 version | u32 k.
+  /// This MUST accept the current "FTX2" and not only the legacy "FTXI" -- when
+  /// it recognised only v1, the shipped v2 index made the whole tag-length
+  /// precondition a no-op, reviving the slow empty-report path it exists to stop.
   int peekTaxdbK_(const String& path)
   {
     std::ifstream f(path.c_str(), std::ios::binary);
     if (!f) return -1;
     char magic[4];
-    if (!f.read(magic, 4) || std::memcmp(magic, "FTXI", 4) != 0) return -1;
+    if (!f.read(magic, 4)) return -1;
+    if (std::memcmp(magic, "FTXI", 4) != 0 && std::memcmp(magic, "FTX2", 4) != 0) return -1;
     std::uint32_t ver = 0, k = 0;
-    if (!f.read(reinterpret_cast<char*>(&ver), 4) || ver != 1) return -1;
+    if (!f.read(reinterpret_cast<char*>(&ver), 4)) return -1;
     if (!f.read(reinterpret_cast<char*>(&k), 4)) return -1;
     return static_cast<int>(k);
   }
@@ -1111,9 +1116,19 @@ protected:
           OPENMS_LOG_ERROR << "-species: no " << need.first << ". ";
           if (tdir.empty())
           {
-            OPENMS_LOG_ERROR << "No bundled taxonomy was found next to the executable "
-                             << "(expected <bin>/../share/FasTag/taxonomy). Pass -" << need.first
-                             << " explicitly, or set FASTAG_TAXONOMY_DIR." << std::endl;
+            OPENMS_LOG_ERROR << "No taxonomy directory was found next to the executable "
+                             << "(expected <bin>/../share/FasTag/taxonomy). Set "
+                             << "FASTAG_TAXONOMY_DIR, or pass -" << need.first << " explicitly."
+                             << std::endl;
+          }
+          else if (need.second == taxdb)
+          {
+            // The dumps ship in every release; the ~1 GB index does not (it is a
+            // separate asset). Missing index is the common case, so name it.
+            OPENMS_LOG_ERROR << "The taxonomy dumps are present in '" << tdir
+                             << "' but the k-mer index (tax_k7.taxdb) is not. Download "
+                             << "FasTag-taxonomy-k7.tar.gz from the release and extract it "
+                             << "there, or set FASTAG_TAXONOMY_DIR / pass -taxdb." << std::endl;
           }
           else
           {
@@ -1195,9 +1210,12 @@ protected:
           std::vector<uint32_t> acc;
           bool first = true;
           const int L = static_cast<int>(seq.size());
+          // One reusable buffer: lookup() fills rather than returns a reference,
+          // because the mapped index holds taxon INDICES, not a vector to borrow.
+          std::vector<uint32_t> t;
           for (int i = 0; i + kk <= L; ++i)
           {
-            const std::vector<uint32_t>& t = idx.lookup(FasTag::TaxIndex::fold(seq.substr(static_cast<size_t>(i), static_cast<size_t>(kk))));
+            idx.lookup(FasTag::TaxIndex::fold(seq.substr(static_cast<size_t>(i), static_cast<size_t>(kk))), t);
             if (first) { acc = t; first = false; }
             else
             {

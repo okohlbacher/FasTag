@@ -333,3 +333,35 @@ research project.
   chimeric-aware or entrapment null — a research result, not an afternoon. The
   `TagFDR` machinery exists and is unit-tested but stays unwired, deliberately,
   so no miscalibrated FDR reaches a user.
+
+## v0.17.0 — compact index, proper species set
+
+### Closed
+- **Species index memory blowup.** The `unordered_map` index cost ~10 GB
+  resident for a 50-taxon set. Replaced with a bit-packed, memory-mapped format
+  (`FTX2`, `src/TaxIndex.*`): base-19 packed keys, 1-byte taxon indices, mmap'd
+  and used in place. Measured on the 50-taxon set: file 2.14 GB -> 1.06 GB, peak
+  RSS 10,188 MB -> **966 MB**, load+run 48.9 s -> **3.66 s**, output identical.
+  v1 (`FTXI`) still loads. Adversarially reviewed (codex): the hostile/truncated
+  -file paths were hardened (checked offset arithmetic, offset-array validation,
+  every section bounds-checked before its pointer is formed), the `codeTable`
+  first-use data race fixed, k capped at 12 where base-19 still fits a uint64,
+  and the qvalue-underflow ranking collapse fixed (tie-break on log_pvalue).
+- **Proper species reference set.** `data/taxonomy/reference-set.tsv`: ~50 taxa
+  (all major model organisms, MS contaminants, common pathogens, gut microbiome,
+  archaea), fetched as UniProt reference proteomes (one protein per gene) so the
+  background model is not skewed by curation depth. `tools/fetch_reference_set.py`
+  resolves species -> strain reference proteomes; the index ships as
+  `FasTag-taxonomy-k7.tar.gz`.
+
+### Known limit, not a bug
+- 7-mers cannot separate closely related mammals: on a human sample *Homo* wins
+  but *Macaca*/*Bos*/*Sus* follow within ~5%. Genus/family is the honest ceiling;
+  the old 17-taxon set only looked sharper because the competitors were absent.
+
+### Still open (unchanged from v0.16.0)
+- F13 ProForma / mzTab / mzIdentML output; F6 multi-length tags; GUI P2-P6;
+  release signing (awaits secrets); F4 calibrated q-value (research).
+- 1(b) embed-the-index-in-every-tarball is NOT done: the index ships as a single
+  shared asset instead. Full per-tarball embedding needs a build-once/download
+  CI job; deferred as too risky to land unattended, tracked here.

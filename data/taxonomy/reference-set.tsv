@@ -1,0 +1,81 @@
+# FasTag species reference set.
+#
+# taxid <TAB> label <TAB> category
+#
+# Fetched as UniProt REFERENCE PROTEOMES (one protein per gene, complete), NOT
+# `reviewed:true`. The previous set used reviewed-only and was wildly uneven --
+# 20,431 proteins for human against 35 for S. pneumoniae -- because curation
+# effort tracks how well-studied an organism is, not its proteome size. That
+# unevenness goes straight into the background model: a taxon with 35 proteins
+# has an artificially tiny expectation, so anything matching it looks enriched.
+#
+# Scope is deliberately breadth-first, not depth: short peptide tags resolve
+# genus/family at best, so one good representative per genus beats several
+# strains of the same species.
+
+# ---- model organisms -------------------------------------------------------
+9606	Homo_sapiens	model
+10090	Mus_musculus	model
+10116	Rattus_norvegicus	model
+7955	Danio_rerio	model
+7227	Drosophila_melanogaster	model
+6239	Caenorhabditis_elegans	model
+559292	Saccharomyces_cerevisiae_S288C	model
+284812	Schizosaccharomyces_pombe	model
+3702	Arabidopsis_thaliana	model
+8364	Xenopus_tropicalis	model
+9031	Gallus_gallus	model
+44689	Dictyostelium_discoideum	model
+3055	Chlamydomonas_reinhardtii	model
+367110	Neurospora_crassa	model
+237561	Candida_albicans	model
+227321	Aspergillus_nidulans	model
+36329	Plasmodium_falciparum_3D7	model
+185431	Trypanosoma_brucei	model
+4577	Zea_mays	model
+39947	Oryza_sativa_japonica	model
+83333	Escherichia_coli_K12	model
+224308	Bacillus_subtilis_168	model
+10029	Cricetulus_griseus	model
+9544	Macaca_mulatta	model
+
+# ---- MS contaminants / reagent sources ------------------------------------
+# Present in almost every LC-MS/MS run regardless of sample. Omitting them does
+# not make them go away; it makes their peptides land on whatever taxon is
+# closest, which is worse than naming them.
+9913	Bos_taurus	contaminant
+9823	Sus_scrofa	contaminant
+9986	Oryctolagus_cuniculus	contaminant
+9940	Ovis_aries	contaminant
+9796	Equus_caballus	contaminant
+
+# ---- pathogens / clinically common ----------------------------------------
+1280	Staphylococcus_aureus	pathogen
+1313	Streptococcus_pneumoniae	pathogen
+287	Pseudomonas_aeruginosa	pathogen
+83332	Mycobacterium_tuberculosis_H37Rv	pathogen
+99287	Salmonella_Typhimurium_LT2	pathogen
+573	Klebsiella_pneumoniae	pathogen
+615	Serratia_marcescens	pathogen
+632	Yersinia_pestis	pathogen
+727	Haemophilus_influenzae	pathogen
+210	Helicobacter_pylori	pathogen
+1639	Listeria_monocytogenes	pathogen
+1496	Clostridioides_difficile	pathogen
+1351	Enterococcus_faecalis	pathogen
+
+# ---- plant pathogens (the original target lineage) -------------------------
+218491	Pectobacterium_atrosepticum	plant_pathogen
+198628	Dickeya_dadantii	plant_pathogen
+
+# ---- gut microbiome representatives ----------------------------------------
+818	Bacteroides_thetaiotaomicron	microbiome
+1681	Bifidobacterium_bifidum	microbiome
+853	Faecalibacterium_prausnitzii	microbiome
+1613	Limosilactobacillus_fermentum	microbiome
+
+# ---- archaea (breadth, so the tree is not bacteria-only) -------------------
+# Strain-level taxids: the SPECIES taxids (2190, 2287) carry only non-reference
+# proteomes, so a species-level fetch silently returns nothing.
+243232	Methanocaldococcus_jannaschii_DSM2661	archaea
+273057	Saccharolobus_solfataricus_P2	archaea

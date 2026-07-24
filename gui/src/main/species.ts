@@ -27,10 +27,12 @@ export function readTaxdbInfo(path: string): TaxdbInfo | null {
     fd = openSync(path, 'r')
     const buf = Buffer.alloc(20)
     if (readSync(fd, buf, 0, 20, 0) < 20) return null
-    if (buf.toString('latin1', 0, 4) !== 'FTXI') return null
-    const version = buf.readUInt32LE(4)
-    if (version !== 1) return null
-    return { path, k: buf.readUInt32LE(8), kmers: Number(buf.readBigUInt64LE(12)) }
+    const magic = buf.toString('latin1', 0, 4)
+    // Both versions store k at offset 8. The k-mer count moved: v1 (FTXI) put n
+    // at 12; v2 (FTX2) put n_taxa at 12 and n_kmers at 16.
+    if (magic !== 'FTXI' && magic !== 'FTX2') return null
+    const kmers = magic === 'FTX2' ? Number(buf.readBigUInt64LE(16)) : Number(buf.readBigUInt64LE(12))
+    return { path, k: buf.readUInt32LE(8), kmers }
   } catch {
     return null
   } finally {

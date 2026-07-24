@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21 FATAL_ERROR)
-project(FasTag VERSION 0.16.0 LANGUAGES CXX)
+project(FasTag VERSION 0.17.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -148,12 +148,16 @@ install(TARGETS FasTag RUNTIME DESTINATION bin)
 
 # The taxonomy -species resolves by default, at <bin>/../share/FasTag/taxonomy.
 #
-# Only the pruned NCBI dumps (12 KB) live here. The k-mer index itself is 232 MB
-# and platform-independent, so it ships once per release as
-# FasTag-taxonomy.tar.gz rather than five times inside the per-platform tarballs
-# -- see the README beside these files. FasTag names the directory it searched
-# when the index is absent, so that is a clear error, never a silent empty report.
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/taxonomy/"
+# Only the pruned NCBI dumps (~30 KB) are installed here. The k-mer index is
+# ~1 GB and platform-independent, so it ships once as the release asset
+# FasTag-taxonomy-k7.tar.gz rather than inside every per-platform tarball -- see
+# the README beside these files. FasTag names the directory it searched when the
+# index is absent, so that is a clear error, never a silent empty report.
+# reference-set.tsv is the manifest; it is installed too so a user can rebuild.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/taxonomy/nodes.dmp"
+              "${CMAKE_CURRENT_SOURCE_DIR}/data/taxonomy/names.dmp"
+              "${CMAKE_CURRENT_SOURCE_DIR}/data/taxonomy/README.md"
+              "${CMAKE_CURRENT_SOURCE_DIR}/data/taxonomy/reference-set.tsv"
         DESTINATION share/FasTag/taxonomy)
 
 add_executable(buildtaxdb src/buildtaxdb.cpp)
