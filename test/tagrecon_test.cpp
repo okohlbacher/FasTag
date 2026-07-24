@@ -43,6 +43,8 @@ namespace
     entries.emplace_back("PROT1", "test protein", protein_seq);
     TagReconciler r(0.02, /*ppm=*/false, /*both=*/true);
     r.build(entries, /*k=*/4, /*missed=*/0, /*fixed_mods=*/{});
+    r.setModCandidates({{"Phospho", 79.96633, "STY"}, {"Acetyl", 42.01057, "K"},
+                        {"Oxidation", 15.99491, "M"}});
     return r;
   }
 }
@@ -76,13 +78,34 @@ int main()
     const double nflank = sumMass(pep.substr(0, pos));
     const double cflank = sumMass(pep.substr(pos + 4)) + 79.96633;  // a phospho somewhere C-side
     auto res = r.reconcile(tag, nflank, cflank);
-    bool localized = false;
+    bool localized = false, interpreted = false;
     for (const auto& x : res)
       if (x.peptide == pep && x.pos == pos && x.nterm_match && !x.cterm_match &&
           std::fabs(x.delta_mass - 79.96633) < 1e-3 &&
           x.region_lo == static_cast<int>(pos + 4) && x.region_hi == static_cast<int>(pep.size()) - 1)
+      {
         localized = true;
+        if (x.delta_interp.rfind("mod:Phospho@", 0) == 0) interpreted = true;
+      }
     check(localized, "a C-side +79.966 gap localizes to the C-flank region with the right mass");
+    check(interpreted, "stage B interprets the +79.966 gap as mod:Phospho@S/T");
+  }
+
+  // --- Substitution gap: replace a region residue X by Y, delta = m(Y)-m(X) ---
+  {
+    const size_t pos = 4;                               // tag "LEVG", region C = "ATSDGK"
+    const std::string tag = pep.substr(pos, 4);
+    // A->S substitution in the C region: delta = m(S) - m(A) = 87.03203 - 71.03711.
+    const double dsub = 87.03203 - 71.03711;
+    const double nflank = sumMass(pep.substr(0, pos));
+    const double cflank = sumMass(pep.substr(pos + 4)) + dsub;
+    auto res = r.reconcile(tag, nflank, cflank);
+    bool sub = false;
+    for (const auto& x : res)
+      if (x.peptide == pep && !x.cterm_match && std::fabs(x.delta_mass - dsub) < 1e-3 &&
+          x.delta_interp == "sub:A->S")
+        sub = true;
+    check(sub, "stage B interprets an A->S mass gap as sub:A->S");
   }
 
   // --- Modification gap on the N-side ---
