@@ -150,6 +150,9 @@ add_executable(buildtaxdb src/buildtaxdb.cpp)
 target_link_libraries(buildtaxdb PRIVATE fastag_core)
 install(TARGETS buildtaxdb RUNTIME DESTINATION bin)
 
+add_executable(tagfeatures src/tagfeatures.cpp)
+install(TARGETS tagfeatures RUNTIME DESTINATION bin)
+
 option(FASTAG_BUILD_BENCH "Build the synthetic benchmark" ON)
 if(FASTAG_BUILD_BENCH)
   add_executable(benchmark bench/benchmark.cpp)
@@ -164,6 +167,11 @@ if(FASTAG_BUILD_TESTS)
     target_link_libraries(${t} PRIVATE fastag_core)
     add_test(NAME ${t} COMMAND ${t})
   endforeach()
+
+  add_executable(tagfeatures_test test/tagfeatures_test.cpp src/tagfeatures.cpp)
+  target_include_directories(tagfeatures_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_compile_definitions(tagfeatures_test PRIVATE TAGFEATURES_NO_MAIN)
+  add_test(NAME tagfeatures_test COMMAND tagfeatures_test)
 
   # One short run per acquisition class, gaps and deisotoping ON.
   #
