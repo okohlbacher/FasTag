@@ -95,24 +95,36 @@ ipcMain.handle('fastag:run', (e, params: RunParams) => {
   if (currentRun) return { started: false, reason: 'a run is already in progress' }
   const wc = e.sender
   const runId = ++runSeq
-  // The GUI always wants machine-readable progress; force the flag on. Both
-  // terminal callbacks clear currentRun and carry runId; runFastag guarantees
-  // exactly one of them fires, so exactly one fastag:done is sent per run.
-  currentRun = runFastag(
+  // Sending to a destroyed WebContents throws "Object has been destroyed" and
+  // would take down the main process; a run whose window closed/reloaded still
+  // emits log + terminal callbacks, so every send is guarded.
+  const send = (channel: string, payload: unknown): void => {
+    if (!wc.isDestroyed()) wc.send(channel, payload)
+  }
+  // The GUI always wants machine-readable progress; force the flag on.
+  let handle: RunHandle | null = null
+  // Clear currentRun only if it is still OURS: a stale run that ignored SIGTERM
+  // can exit after a reload started a new run, and an unconditional null would
+  // steal the new run's ownership (cancel could no longer stop it).
+  const clearIfMine = (): void => {
+    if (currentRun === handle) currentRun = null
+  }
+  handle = runFastag(
     { ...params, progress: true },
     {
-      onLog: (line) => wc.send('fastag:log', line),
-      onProgress: (done, total) => wc.send('fastag:progress', { done, total }),
+      onLog: (line) => send('fastag:log', line),
+      onProgress: (done, total) => send('fastag:progress', { done, total }),
       onError: (message) => {
-        currentRun = null
-        wc.send('fastag:done', { runId, ok: false, code: null, message })
+        clearIfMine()
+        send('fastag:done', { runId, ok: false, code: null, message })
       },
       onExit: (code) => {
-        currentRun = null
-        wc.send('fastag:done', { runId, ok: code === 0, code })
+        clearIfMine()
+        send('fastag:done', { runId, ok: code === 0, code })
       }
     }
   )
+  currentRun = handle
   return { started: true, runId }
 })
 
@@ -162,6 +174,9 @@ if (!app.requestSingleInstanceLock()) {
     if (win) {
       if (win.isMinimized()) win.restore()
       win.focus()
+    } else {
+      // macOS keeps the app alive with no window; a relaunch should show one.
+      createWindow()
     }
   })
   app.whenReady().then(() => {

@@ -67,6 +67,11 @@ export default function App(): JSX.Element {
   // id (not a single slot) means a duplicated or late terminal event can only
   // ever resolve the run it belongs to -- never the next job's awaiter.
   const pending = useRef(new Map<number, (r: RunResult) => void>())
+  // A terminal event can beat the invoke reply: a binary that vanishes after
+  // probing makes the child emit 'error' before `run()` resolves with the run
+  // id, so onDone would arrive before the resolver is registered. Park such a
+  // result here; runOne claims it the moment it learns the id.
+  const earlyDone = useRef(new Map<number, RunResult>())
   // Parsed from the CLI's own summary line, so the panel reports what the run
   // actually did rather than a number the GUI guessed.
   const [evidence, setEvidence] = useState<{ contributed: number | null; ms2: number | null }>({
@@ -124,6 +129,7 @@ export default function App(): JSX.Element {
       const resolve = id != null ? pending.current.get(id) : undefined
       if (id != null) pending.current.delete(id)
       if (resolve) resolve(r)
+      else if (id != null) earlyDone.current.set(id, r) // beat the resolver; runOne will claim it
       if (pending.current.size === 0) setRunning(false)
     })
     return () => {
@@ -192,7 +198,14 @@ export default function App(): JSX.Element {
           // Register the awaiter only once the main process hands back the run
           // id; the terminal event carries the same id (see onDone).
           if (res.started && res.runId != null) {
-            pending.current.set(res.runId, resolve)
+            const early = earlyDone.current.get(res.runId)
+            if (early) {
+              // The terminal event already fired before this reply landed.
+              earlyDone.current.delete(res.runId)
+              settle(early)
+            } else {
+              pending.current.set(res.runId, resolve)
+            }
           } else {
             setLog([`could not start: ${res.reason ?? 'unknown'}`])
             settle({ ok: false, code: null, message: res.reason })

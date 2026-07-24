@@ -192,7 +192,9 @@ export function runFastag(params: RunParams, cb: RunCallbacks): RunHandle {
   const handle: RunHandle = { child, args, exited: false }
   let settled = false
   child.on('error', (e) => {
-    handle.exited = true
+    // 'error' does NOT mean the process ended -- it also fires on a failed
+    // kill() while the child keeps running. Do NOT set exited here, or a
+    // kill-error would suppress the SIGKILL escalation. Only 'close' proves exit.
     if (settled) return
     settled = true
     cb.onError(e.message)
