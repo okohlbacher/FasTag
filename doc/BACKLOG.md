@@ -311,7 +311,8 @@ research project.
 | **F5** Mass-shift localization | days | Should interoperate with PTM-Shepherd rather than reimplement it; needs a design decision first. |
 | **F6** Multi-length tags in one run | ~1 day | `-tag_length` is single-valued today. Cheap, but changes the output contract, so it wants a deliberate schema choice. |
 | **F13** ProForma / mzTab / mzIdentML / USI output | days each | Unglamorous and force-multiplying; each format is its own spec-conformance job. |
-| **GUI P2–P6** presets, run IDs + `.partial`, batch queue, million-row DuckDB browser, signing/auto-update | 1–2 weeks | Sequenced in `gui/PLAN.md`. The app is P0/P1 — one file at a time, capped preview. |
+| **GUI P2–P6** presets, run IDs + `.partial`, batch queue, million-row DuckDB browser, signing/auto-update | 1–2 weeks | Sequenced in `gui/PLAN.md`. P2 (presets/last-used) and P4 (sequential batch) done; the run orchestration is hardened (exactly-once terminal event correlated to a run id, cancellation escalation, corrupt-settings preservation, single-instance lock) after a codex review. Still open: P5 DuckDB browser, P6 packaging/signing. |
+| **GUI OMP Error #15** duplicate `libomp` at spawn | hours, packaging | The bundled `FasTag` binary intermittently aborts under Electron with `OMP: Error #15: ... libomp.dylib already initialized` — a load-order race between two OpenMP copies in the binary's own dylib closure (the P0 conda-build loader finding). Runs succeed when the race is won or with `KMP_DUPLICATE_LIB_OK=TRUE`, but that flag can silently corrupt results, so it must NOT ship in a scientific tool. Fix belongs in the bundle: dedupe to a single `libomp` at pack time (P6 `afterPack`), then verify a spawned run never hits #15. |
 | **`OnDiscMzPeakExperiment`** | days, upstream | Would delete FasTag's consumer entirely and unify the two read paths. Belongs in OpenMS, not here. |
 
 ### Blocked on someone else

@@ -20,6 +20,10 @@ export interface RunResult {
   ok: boolean
   code: number | null
   message?: string
+  // Set on results delivered via fastag:done; correlates the terminal event to
+  // the run the renderer is awaiting. Absent on synthetic failure results the
+  // renderer builds itself (e.g. a run that never started).
+  runId?: number
 }
 
 export interface Taxon {
@@ -63,7 +67,7 @@ export interface FastagApi {
   pickInput: () => Promise<string | null>
   pickInputs: () => Promise<string[]>
   pickOutput: (defaultPath?: string) => Promise<string | null>
-  run: (params: Record<string, unknown>) => Promise<{ started: boolean; reason?: string }>
+  run: (params: Record<string, unknown>) => Promise<{ started: boolean; reason?: string; runId?: number }>
   cancel: () => Promise<{ cancelled: boolean }>
   preview: (path: string, maxRows?: number) => Promise<Preview>
   onLog: (cb: (line: string) => void) => () => void

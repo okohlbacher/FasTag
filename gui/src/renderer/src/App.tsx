@@ -63,8 +63,10 @@ export default function App(): JSX.Element {
   const [savingName, setSavingName] = useState<string | null>(null)  // non-null = the 'save as' input is open
   const [jobs, setJobs] = useState<Job[]>([])
   const [batchRunning, setBatchRunning] = useState(false)
-  // Resolver for the run currently in flight (single or batch); see onDone.
-  const resolveRun = useRef<((r: RunResult) => void) | null>(null)
+  // Awaiter for the run in flight, keyed by the main process's run id. Keying by
+  // id (not a single slot) means a duplicated or late terminal event can only
+  // ever resolve the run it belongs to -- never the next job's awaiter.
+  const pending = useRef(new Map<number, (r: RunResult) => void>())
   // Parsed from the CLI's own summary line, so the panel reports what the run
   // actually did rather than a number the GUI guessed.
   const [evidence, setEvidence] = useState<{ contributed: number | null; ms2: number | null }>({
@@ -113,15 +115,16 @@ export default function App(): JSX.Element {
     })
     const offProgress = window.fastag.onProgress((p) => setProgress(p))
     const offDone = window.fastag.onDone((r: RunResult) => {
-      setRunning(false)
       setProgress(null)
       setLog((l) => [...l, r.ok ? '— done —' : `— failed (${r.message ?? `exit ${r.code}`}) —`])
-      // Hand the result to whoever is awaiting this run (single or batch). Only
-      // one run is ever in flight (the main process enforces it), so one pending
-      // resolver is enough.
-      const resolve = resolveRun.current
-      resolveRun.current = null
+      // Hand the result to the awaiter for THIS run id. A terminal event with no
+      // matching awaiter (a duplicate, or a run already settled by a failed
+      // start) is dropped rather than resolving an unrelated job.
+      const id = r.runId
+      const resolve = id != null ? pending.current.get(id) : undefined
+      if (id != null) pending.current.delete(id)
       if (resolve) resolve(r)
+      if (pending.current.size === 0) setRunning(false)
     })
     return () => {
       offLog()
@@ -177,16 +180,29 @@ export default function App(): JSX.Element {
     return new Promise<RunResult>((resolve) => {
       setLog([])
       setProgress(null)
+      setEvidence({ contributed: null, ms2: null }) // don't carry a prior run's counts
       setRunning(true)
-      resolveRun.current = resolve
-      window.fastag.run({ in: inFile, out: outFile, params: submittedParams() }).then((res) => {
-        if (!res.started) {
-          setRunning(false)
-          resolveRun.current = null
-          setLog([`could not start: ${res.reason ?? 'unknown'}`])
-          resolve({ ok: false, code: null, message: res.reason })
-        }
-      })
+      const settle = (r: RunResult): void => {
+        if (pending.current.size === 0) setRunning(false)
+        resolve(r)
+      }
+      window.fastag
+        .run({ in: inFile, out: outFile, params: submittedParams() })
+        .then((res) => {
+          // Register the awaiter only once the main process hands back the run
+          // id; the terminal event carries the same id (see onDone).
+          if (res.started && res.runId != null) {
+            pending.current.set(res.runId, resolve)
+          } else {
+            setLog([`could not start: ${res.reason ?? 'unknown'}`])
+            settle({ ok: false, code: null, message: res.reason })
+          }
+        })
+        .catch((err) => {
+          // A rejected invoke would otherwise leave running=true forever.
+          setLog([`could not start: ${err instanceof Error ? err.message : String(err)}`])
+          settle({ ok: false, code: null, message: String(err) })
+        })
     })
   }
 
@@ -212,14 +228,21 @@ export default function App(): JSX.Element {
     if (jobs.length === 0 || batchRunning) return
     window.fastag.saveLast(values)
     setBatchRunning(true)
-    for (let i = 0; i < jobs.length; i++) {
-      if (jobs[i].status === 'done') continue
-      setJobs((js) => js.map((j, k) => (k === i ? { ...j, status: 'running' } : j)))
-      const r = await runOne(jobs[i].input, jobs[i].out)
-      setJobs((js) => js.map((j, k) => (k === i ? { ...j, status: r.ok ? 'done' : 'failed' } : j)))
-      if (r.ok && i === jobs.length - 1) await showResults(jobs[i].out)  // preview the last
+    // Snapshot the queue we're running and key status updates by input path (the
+    // queue is dedup'd on input). A thrown preview/species must still release the
+    // batch controls -- hence finally -- or Run stays disabled forever.
+    const queue = jobs.filter((j) => j.status !== 'done')
+    try {
+      for (let i = 0; i < queue.length; i++) {
+        const job = queue[i]
+        setJobs((js) => js.map((j) => (j.input === job.input ? { ...j, status: 'running' } : j)))
+        const r = await runOne(job.input, job.out)
+        setJobs((js) => js.map((j) => (j.input === job.input ? { ...j, status: r.ok ? 'done' : 'failed' } : j)))
+        if (r.ok && i === queue.length - 1) await showResults(job.out)  // preview the last
+      }
+    } finally {
+      setBatchRunning(false)
     }
-    setBatchRunning(false)
   }
 
   function resetDefaults(): void {
@@ -285,7 +308,7 @@ export default function App(): JSX.Element {
               <button className="secondary" onClick={pickInput}>
                 Choose file…
               </button>
-              <button className="secondary" onClick={addBatchFiles} title="Queue several files to run in turn">
+              <button className="secondary" onClick={addBatchFiles} disabled={batchRunning || running} title="Queue several files to run in turn">
                 Add batch…
               </button>
             </div>

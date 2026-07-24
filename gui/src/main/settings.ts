@@ -9,6 +9,17 @@ import { app } from 'electron'
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 
+// __proto__/constructor/prototype as a preset name or last-used key would poison
+// Object.prototype when merged in the renderer. Keep only own, safe keys.
+function sanitize<T extends object>(o: T): T {
+  const out = Object.create(null) as Record<string, unknown>
+  for (const [k, v] of Object.entries(o)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue
+    out[k] = v
+  }
+  return out as T
+}
+
 export interface Settings {
   schemaVersion: number
   /// The form state to restore on next launch (values keyed by CLI option name).
@@ -21,17 +32,31 @@ const FILE = () => join(app.getPath('userData'), 'fastag-settings.json')
 const EMPTY: Settings = { schemaVersion: 1, lastUsed: null, presets: {} }
 
 export function loadSettings(): Settings {
+  const p = FILE()
   try {
-    const p = FILE()
     if (!existsSync(p)) return { ...EMPTY }
     const raw = JSON.parse(readFileSync(p, 'utf8'))
     // Tolerate an older/partial shape rather than trust the file blindly.
+    const presetsIn =
+      raw && typeof raw.presets === 'object' && raw.presets ? sanitize(raw.presets as Record<string, Record<string, unknown>>) : {}
+    const presets: Record<string, Record<string, unknown>> = {}
+    for (const [name, values] of Object.entries(presetsIn)) {
+      if (values && typeof values === 'object') presets[name] = sanitize(values)
+    }
     return {
       schemaVersion: 1,
-      lastUsed: raw && typeof raw.lastUsed === 'object' ? raw.lastUsed : null,
-      presets: raw && typeof raw.presets === 'object' && raw.presets ? raw.presets : {}
+      lastUsed: raw && typeof raw.lastUsed === 'object' && raw.lastUsed ? sanitize(raw.lastUsed) : null,
+      presets
     }
   } catch {
+    // The file exists but didn't parse. Move it aside ONCE so the next save()
+    // doesn't silently overwrite (and destroy) recoverable presets; then start
+    // empty rather than crashing the app on launch.
+    try {
+      if (existsSync(p) && !existsSync(`${p}.corrupt`)) renameSync(p, `${p}.corrupt`)
+    } catch {
+      /* best effort -- a failed backup must not itself throw */
+    }
     return { ...EMPTY }
   }
 }
@@ -51,15 +76,15 @@ function save(s: Settings): boolean {
 
 export function saveLastUsed(values: Record<string, unknown>): boolean {
   const s = loadSettings()
-  s.lastUsed = values
+  s.lastUsed = sanitize(values)
   return save(s)
 }
 
 export function savePreset(name: string, values: Record<string, unknown>): boolean {
   const clean = name.trim()
-  if (!clean) return false
+  if (!clean || clean === '__proto__' || clean === 'constructor' || clean === 'prototype') return false
   const s = loadSettings()
-  s.presets[clean] = values
+  s.presets[clean] = sanitize(values)
   return save(s)
 }
 

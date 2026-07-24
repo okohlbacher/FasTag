@@ -5,8 +5,11 @@ import { previewTsv } from './preview'
 import { readSpecies, readTaxdbInfo, bundledTaxdb } from './species'
 import { loadSettings, saveLastUsed, savePreset, deletePreset } from './settings'
 
-// One in-flight run for the P0/P1 skeleton (batch queue comes later).
+// One in-flight run (the batch queue runs sequentially, one process at a time).
 let currentRun: RunHandle | null = null
+// Monotonic id so a terminal event is correlated to the run that produced it:
+// the renderer only resolves the awaiter whose id matches, never a stray one.
+let runSeq = 0
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -25,9 +28,22 @@ function createWindow(): void {
 
   win.on('ready-to-show', () => win.show())
 
-  // External links open in the OS browser, never in-app.
+  // Killing the window (close or reload) must not orphan a running CLI process.
+  const killOrphan = (): void => {
+    if (currentRun) {
+      cancelRun(currentRun)
+      currentRun = null
+    }
+  }
+  win.on('closed', killOrphan)
+  win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) killOrphan() // a reload/navigation, not a hash change
+  })
+
+  // External links open in the OS browser, never in-app -- and only real web
+  // links: never hand file:, javascript:, or other schemes to the OS opener.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
 
@@ -78,20 +94,26 @@ ipcMain.handle('dialog:pickOutput', async (_e, defaultPath?: string) => {
 ipcMain.handle('fastag:run', (e, params: RunParams) => {
   if (currentRun) return { started: false, reason: 'a run is already in progress' }
   const wc = e.sender
-  // The GUI always wants machine-readable progress; force the flag on.
+  const runId = ++runSeq
+  // The GUI always wants machine-readable progress; force the flag on. Both
+  // terminal callbacks clear currentRun and carry runId; runFastag guarantees
+  // exactly one of them fires, so exactly one fastag:done is sent per run.
   currentRun = runFastag(
     { ...params, progress: true },
     {
       onLog: (line) => wc.send('fastag:log', line),
       onProgress: (done, total) => wc.send('fastag:progress', { done, total }),
-      onError: (message) => wc.send('fastag:done', { ok: false, code: null, message }),
+      onError: (message) => {
+        currentRun = null
+        wc.send('fastag:done', { runId, ok: false, code: null, message })
+      },
       onExit: (code) => {
         currentRun = null
-        wc.send('fastag:done', { ok: code === 0, code })
+        wc.send('fastag:done', { runId, ok: code === 0, code })
       }
     }
   )
-  return { started: true }
+  return { started: true, runId }
 })
 
 ipcMain.handle('fastag:cancel', () => {
@@ -130,12 +152,25 @@ ipcMain.handle('fastag:openTaxon', (_e, taxid: number) => {
 
 // ---- lifecycle ------------------------------------------------------------
 
-app.whenReady().then(() => {
-  createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+// A second launch should focus the existing window, not spin up a rival main
+// process that fights over the same settings file and run state.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.focus()
+    }
   })
-})
+  app.whenReady().then(() => {
+    createWindow()
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

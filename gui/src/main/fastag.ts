@@ -116,10 +116,17 @@ function buildArgs(p: RunParams): string[] {
       continue
     }
     if (Array.isArray(value)) {
+      // Multiple values are only meaningful for a list-typed option. An array on
+      // a scalar param is a stale preset or a crafted message -- drop it rather
+      // than feed the CLI several tokens it will misparse or reject.
+      if (spec !== 'string-list' && spec !== 'int-list' && spec !== 'double-list') continue
       const items = value.map((v) => String(v).trim()).filter((v) => v !== '')
       if (items.length) args.push(`-${name}`, ...items)
       continue
     }
+    // A scalar option gets exactly one token; objects/functions have no sane CLI
+    // form, so coerce only primitives.
+    if (value !== null && typeof value === 'object') continue
     const s = String(value).trim()
     if (s === '') continue // unset optional (an empty path is not "no path")
     args.push(`-${name}`, s)
@@ -132,6 +139,7 @@ function buildArgs(p: RunParams): string[] {
 export interface RunHandle {
   child: ChildProcess
   args: string[]
+  exited: boolean
 }
 
 export interface RunCallbacks {
@@ -155,29 +163,50 @@ export function runFastag(params: RunParams, cb: RunCallbacks): RunHandle {
   const args = buildArgs(params)
   const child = spawn(bin, args, { env, windowsHide: true })
 
-  let buf = ''
   const routeLine = (line: string): void => {
     const m = PROGRESS_RE.exec(line)
     if (m) cb.onProgress(Number(m[1]), Number(m[2]))
     else cb.onLog(line)
   }
-  const pump = (chunk: Buffer): void => {
-    buf += chunk.toString('utf8')
+  // One buffer PER stream: stdout and stderr arrive as independent chunk streams,
+  // so a single shared buffer could splice a half-line from one into the other
+  // and corrupt a FASTAG_PROGRESS line. The final flush lives on 'close'.
+  let errBuf = ''
+  let outBuf = ''
+  const pump = (getset: () => string, put: (s: string) => void) => (chunk: Buffer): void => {
+    let b = getset() + chunk.toString('utf8')
     let nl: number
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      routeLine(buf.slice(0, nl))
-      buf = buf.slice(nl + 1)
+    while ((nl = b.indexOf('\n')) >= 0) {
+      routeLine(b.slice(0, nl))
+      b = b.slice(nl + 1)
     }
+    put(b)
   }
-  child.stderr?.on('data', pump)
-  child.stdout?.on('data', pump)
-  child.on('error', (e) => cb.onError(e.message))
+  child.stderr?.on('data', pump(() => errBuf, (s) => { errBuf = s }))
+  child.stdout?.on('data', pump(() => outBuf, (s) => { outBuf = s }))
+
+  // Exactly-once terminal: a failed spawn can emit BOTH 'error' and 'close',
+  // and a normal exit emits only 'close'. Fire the terminal callback for the
+  // first of the two, so a run never resolves twice (which, upstream, could
+  // resolve the NEXT job's awaiter with this job's result).
+  const handle: RunHandle = { child, args, exited: false }
+  let settled = false
+  child.on('error', (e) => {
+    handle.exited = true
+    if (settled) return
+    settled = true
+    cb.onError(e.message)
+  })
   child.on('close', (code, signal) => {
-    if (buf.length) cb.onLog(buf)
+    handle.exited = true
+    if (settled) return
+    settled = true
+    if (errBuf.length) cb.onLog(errBuf)
+    if (outBuf.length) cb.onLog(outBuf)
     cb.onExit(code, signal)
   })
 
-  return { child, args }
+  return handle
 }
 
 // Cancel: kill the whole process tree (the CLI may spawn OpenMP workers).
@@ -188,9 +217,11 @@ export function cancelRun(handle: RunHandle): void {
     spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'])
   } else {
     handle.child.kill('SIGTERM')
-    // Escalate if it does not exit promptly.
+    // Escalate if it does not exit promptly. child.killed only means a signal
+    // was delivered, not that the process died -- gate on our own exit flag,
+    // set by the close handler, so SIGKILL actually fires on a stuck process.
     setTimeout(() => {
-      if (!handle.child.killed) handle.child.kill('SIGKILL')
+      if (!handle.exited) handle.child.kill('SIGKILL')
     }, 2000)
   }
 }
