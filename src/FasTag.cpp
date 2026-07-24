@@ -23,11 +23,18 @@
 
 #include "FasTagger.h"
 #include "FastaFilter.h"
+#include "SpectrumSampler.h"
+#include "TaxIndex.h"
+#include "TaxStats.h"
 
 #include <fstream>
 #include <map>
 #include <limits>
 #include <memory>
+#include <algorithm>
+#include <iterator>
+#include <random>
+#include <set>
 #include <vector>
 
 #ifdef _OPENMP
@@ -82,12 +89,22 @@ namespace
   public:
     using Flush = std::function<void(std::vector<MSSpectrum>&)>;
 
-    ChunkingConsumer(Flush flush, size_t peak_budget)
-      : flush_(std::move(flush)), budget_(peak_budget) {}
+    /// @param keep_fraction  <1.0 subsamples: each MS2 spectrum is kept with this
+    ///   probability (seeded, so a run is reproducible). 1.0 keeps everything.
+    ///   Only a fraction is offered here -- the push interface has no index, so an
+    ///   exact count would need reservoir sampling; the mzML path handles counts.
+    ChunkingConsumer(Flush flush, size_t peak_budget, double keep_fraction = 1.0,
+                     uint32_t seed = 1)
+      : flush_(std::move(flush)), budget_(peak_budget),
+        keep_(keep_fraction), rng_(seed) {}
 
     void consumeSpectrum(SpectrumType& s) override
     {
       if (s.getMSLevel() != 2 || s.empty() || s.getPrecursors().empty()) return;
+      // Subsample AFTER the MS2 filter so the fraction is of taggable spectra, and
+      // BEFORE buffering so dropped spectra never occupy memory. Called serially
+      // by transform(), so one RNG is safe.
+      if (keep_ < 1.0 && unit_(rng_) >= keep_) return;
       peaks_ += s.size();
       buf_.push_back(s);
       if (peaks_ >= budget_) { flush_(buf_); peaks_ = 0; }
@@ -111,6 +128,9 @@ namespace
   private:
     Flush flush_;
     size_t budget_;
+    double keep_ = 1.0;
+    std::mt19937 rng_;
+    std::uniform_real_distribution<double> unit_{0.0, 1.0};
     size_t peaks_ = 0;
     std::vector<MSSpectrum> buf_;
     ExperimentalSettings settings_;
@@ -203,6 +223,37 @@ protected:
     setMinInt_("peaks_per_window", 0);
     registerIntOption_("max_tags", "<n>", 50, "Tags reported per spectrum; 0 = unlimited", false);
     setMinInt_("max_tags", 0);
+
+    // Random subsampling of input spectra. For a taxon call (or a quick preview)
+    // a run does not need every spectrum -- a uniformly random subset gives the
+    // same lowest-common-ancestor at a fraction of the cost. Selection is seeded
+    // (-subsample_seed) so a run is reproducible. 0 / 0.0 disables. If both are
+    // set, the absolute count wins.
+    registerIntOption_("subsample_spectra", "<n>", 0,
+                       "Tag only this many randomly chosen input spectra; 0 = all", false);
+    setMinInt_("subsample_spectra", 0);
+    registerDoubleOption_("subsample_fraction", "<f>", 0.0,
+                          "Tag only this random fraction (0..1] of input spectra; 0 = all", false);
+    setMinFloat_("subsample_fraction", 0.0);
+    setMaxFloat_("subsample_fraction", 1.0);
+    registerIntOption_("subsample_seed", "<n>", 1, "Seed for -subsample_* selection", false);
+    setMinInt_("subsample_seed", 0);
+
+    // Taxonomic / species detection: throw the tags at a prebuilt tag->taxon
+    // index (buildtaxdb) and infer the taxa present by lowest-common-ancestor
+    // over the tag hits. A reduced reference set gives honest genus/family
+    // resolution; short peptide tags cannot resolve species. Pair with
+    // -subsample_* for a fast call on a large run.
+    registerInputFile_("taxdb", "<file>", "", "Tag->taxon index (built by buildtaxdb) for species detection", false);
+    registerInputFile_("taxonomy_nodes", "<file>", "", "NCBI taxonomy nodes.dmp (for -taxdb)", false);
+    registerInputFile_("taxonomy_names", "<file>", "", "NCBI taxonomy names.dmp (for -taxdb)", false);
+    registerOutputFile_("species_out", "<file>", "", "Ranked taxa TSV (requires -taxdb)", false);
+    setValidFormats_("species_out", ListUtils::create<String>("tsv"));
+    registerIntOption_("species_min_len", "<n>", 0,
+                       "Ignore tags shorter than this for taxonomy; 0 uses the index k", false);
+    setMinInt_("species_min_len", 0);
+    registerStringOption_("species_rank", "<rank>", "genus",
+                          "Report taxa at this NCBI rank (genus, family, ...)", false);
     registerDoubleOption_("max_evalue", "<value>", 20.0, "E-value cutoff; 0 disables", false);
     setMinFloat_("max_evalue", 0.0);
     registerDoubleOption_("gap_penalty", "<value>", 100.0,
@@ -460,6 +511,33 @@ protected:
     }
     const size_t n_total = mzpeak_in ? 0 : (streaming ? ondisc->getNrSpectra() : exp.size());
 
+    // Subsampling selection. For the indexed (mzML) paths the mask is exact -- it
+    // is built over the spectrum indices up front. The count over ALL input
+    // spectra, not MS2 only: the fast reader does not know the MS level up front,
+    // and a fraction is proportional regardless. For the push-based mzPeak path,
+    // where there is no index, only a FRACTION is supported, applied as a seeded
+    // per-spectrum Bernoulli keep inside the consumer (below).
+    const size_t subsample_n = static_cast<size_t>(getIntOption_("subsample_spectra"));
+    const double subsample_frac = getDoubleOption_("subsample_fraction");
+    const uint32_t subsample_seed = static_cast<uint32_t>(getIntOption_("subsample_seed"));
+    const bool subsampling = subsample_n > 0 || subsample_frac > 0.0;
+    if (mzpeak_in && subsample_n > 0)
+    {
+      OPENMS_LOG_ERROR << "-subsample_spectra (absolute count) needs an index and is "
+                          "not supported for mzPeak input; use -subsample_fraction."
+                       << std::endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    FasTag::SampleMask sample_mask;
+    if (subsampling && !mzpeak_in)
+    {
+      sample_mask = subsample_n > 0 ? FasTag::sampleByCount(n_total, subsample_n, subsample_seed)
+                                    : FasTag::sampleByFraction(n_total, subsample_frac, subsample_seed);
+      size_t sel = 0; for (char c : sample_mask) sel += c ? 1 : 0;
+      OPENMS_LOG_INFO << "Subsampling: tagging " << sel << " of " << n_total
+                      << " input spectra (seed " << subsample_seed << ")" << std::endl;
+    }
+
     // Warn when the fragment tolerance looks far too tight for the data.
     //
     // A high-resolution tolerance on low-resolution data is silent, and looks
@@ -664,7 +742,8 @@ protected:
       // Output is correct and byte-identical to the mzML path. Fine for files
       // small relative to RAM; prefer mzML for large runs until the upstream
       // reader streams. Tracked in doc/BACKLOG-mzpeak.md.
-      ChunkingConsumer consumer(flush_chunk, 1000u * 1000u);
+      ChunkingConsumer consumer(flush_chunk, 1000u * 1000u,
+                                subsample_frac > 0.0 ? subsample_frac : 1.0, subsample_seed);
       MzPeakFile().transform(in, &consumer);
       consumer.finish();   // the final partial chunk, otherwise silently dropped
       // Run-level settings for -out_spectra come from the consumer here; the
@@ -687,6 +766,7 @@ protected:
 #pragma omp for schedule(dynamic, 64)
       for (SignedSize i = 0; i < n_spec; ++i)
       {
+        if (!sample_mask.empty() && !sample_mask[static_cast<size_t>(i)]) continue;
         const MSSpectrum loaded = streaming ? reader->getSpectrum(static_cast<Size>(i))
                                             : MSSpectrum();
         const MSSpectrum& spec = streaming ? loaded : exp[static_cast<Size>(i)];
@@ -714,6 +794,136 @@ protected:
       if (!out_spectra.empty()) kept.addSpectrum(kept_spec[i]);
     }
     tsv.close();
+
+    // Taxonomic / species detection from the tags.
+    //
+    // For every spectrum, the SET of taxa its tags support (a tag supports a
+    // taxon when every one of its k-mers is in that taxon -- intersection, so a
+    // longer tag is more specific). Each taxon is counted ONCE per spectrum, not
+    // per tag, so correlated tags from one spectrum cannot manufacture evidence.
+    // Roll the per-leaf counts up the taxonomy, compare each node against the
+    // breadth it has in the index, and rank. The q-value is a ranking aid, not a
+    // calibrated FDR: the per-k-mer background is a proxy and the chimeric-null
+    // problem (see F4 in doc/BACKLOG.md) applies here too.
+    const String taxdb = getStringOption_("taxdb");
+    const String species_out = getStringOption_("species_out");
+    if (!taxdb.empty() && !species_out.empty())
+    {
+      const String nodes = getStringOption_("taxonomy_nodes");
+      const String names = getStringOption_("taxonomy_names");
+      if (nodes.empty() || names.empty())
+      {
+        OPENMS_LOG_ERROR << "-taxdb needs -taxonomy_nodes and -taxonomy_names." << std::endl;
+        return ILLEGAL_PARAMETERS;
+      }
+      FasTag::TaxIndex idx;
+      std::string ierr;
+      if (!idx.load(taxdb, &ierr))
+      {
+        OPENMS_LOG_ERROR << "Failed to load -taxdb '" << taxdb << "': " << ierr << std::endl;
+        return INPUT_FILE_CORRUPT;
+      }
+      FasTag::Taxonomy tax;
+      std::string terr;
+      if (!tax.load(nodes, names, &terr))
+      {
+        OPENMS_LOG_ERROR << "Failed to load taxonomy: " << terr << std::endl;
+        return INPUT_FILE_CORRUPT;
+      }
+      const int kk = idx.k();
+      int min_len = getIntOption_("species_min_len");
+      if (min_len < kk) min_len = kk;
+
+      // Per-spectrum taxon support -> per-leaf spectrum counts.
+      std::map<uint32_t, uint64_t> hits;
+      size_t n_units = 0;
+      // Group the written rows by spectrum: field 0 = spectrum id, field 1 = tag.
+      std::map<std::string, std::vector<std::string>> by_spec;
+      for (size_t i = 0; i < rows.size(); ++i)
+      {
+        if (!keep[i]) continue;
+        const std::string& r = rows[i];
+        size_t start = 0;
+        while (start < r.size())
+        {
+          size_t nl = r.find('\n', start);
+          if (nl == std::string::npos) nl = r.size();
+          size_t t1 = r.find('\t', start);
+          if (t1 != std::string::npos && t1 < nl)
+          {
+            size_t t2 = r.find('\t', t1 + 1);
+            if (t2 != std::string::npos && t2 <= nl)
+              by_spec[r.substr(start, t1 - start)].push_back(r.substr(t1 + 1, t2 - t1 - 1));
+          }
+          start = nl + 1;
+        }
+      }
+      for (const auto& sp : by_spec)
+      {
+        std::set<uint32_t> taxa;  // taxa supported anywhere in this spectrum
+        for (const std::string& raw : sp.second)
+        {
+          const std::string seq = FasTag::baseSequence(raw);
+          if (static_cast<int>(seq.size()) < min_len) continue;
+          // Intersection of the tag's k-mer taxon sets: the taxon must carry the
+          // whole tag, not just one window.
+          std::vector<uint32_t> acc;
+          bool first = true;
+          const int L = static_cast<int>(seq.size());
+          for (int i = 0; i + kk <= L; ++i)
+          {
+            const std::vector<uint32_t>& t = idx.lookup(FasTag::TaxIndex::fold(seq.substr(static_cast<size_t>(i), static_cast<size_t>(kk))));
+            if (first) { acc = t; first = false; }
+            else
+            {
+              std::vector<uint32_t> tmp;
+              std::set_intersection(acc.begin(), acc.end(), t.begin(), t.end(), std::back_inserter(tmp));
+              acc.swap(tmp);
+            }
+            if (acc.empty()) break;
+          }
+          for (uint32_t tx : acc) taxa.insert(tx);
+        }
+        if (taxa.empty()) continue;
+        ++n_units;
+        for (uint32_t tx : taxa) ++hits[tx];
+      }
+
+      // Roll observed hits AND the index breadth up the tree, so each node's
+      // background is the breadth of its whole subtree.
+      std::vector<std::pair<uint32_t, uint64_t>> hit_pairs(hits.begin(), hits.end());
+      std::vector<std::pair<uint32_t, uint64_t>> post_pairs;
+      for (uint32_t tx : idx.taxa()) post_pairs.emplace_back(tx, idx.postings(tx));
+      const auto rolled = tax.rollUp(hit_pairs);
+      const auto rolled_post = tax.rollUp(post_pairs);
+      std::map<uint32_t, double> bg;
+      const double nk = static_cast<double>(std::max<uint64_t>(1, idx.nKmers()));
+      for (const auto& np : rolled_post) bg[np.taxid] = static_cast<double>(np.subtree_hits) / nk;
+      std::vector<std::pair<uint32_t, double>> bg_pairs(bg.begin(), bg.end());
+
+      const double qthr = 1.0;  // rank everything; the report shows q, caller thresholds
+      auto calls = tax.call(rolled, bg_pairs, static_cast<uint64_t>(n_units), qthr);
+
+      const String want_rank = getStringOption_("species_rank");
+      std::ofstream so(species_out.c_str());
+      so << "rank\ttaxid\tname\tobserved\texpected\tenrichment\tlog_pvalue\tqvalue\n";
+      size_t shown = 0;
+      for (const auto& c : calls)
+      {
+        if (c.rank != want_rank) continue;
+        const double enr = c.expected > 0 ? c.observed / c.expected : 999.0;
+        char line[512];
+        std::snprintf(line, sizeof line, "%s\t%u\t%s\t%llu\t%.1f\t%.1fx\t%g\t%g\n",
+                      c.rank.c_str(), c.taxid, c.name.c_str(),
+                      static_cast<unsigned long long>(c.observed), c.expected, enr,
+                      c.log_pvalue, c.qvalue);
+        so << line;
+        if (++shown >= 50) break;
+      }
+      so.close();
+      OPENMS_LOG_INFO << "Species: " << n_units << " spectra contributed taxon evidence; "
+                      << "top " << want_rank << " calls -> " << species_out << std::endl;
+    }
 
     OPENMS_LOG_INFO << n_ms2 << " MS2 spectra, " << n_tags << " tags";
     if (filtering) OPENMS_LOG_INFO << " -> " << n_reported << " after filtering";
