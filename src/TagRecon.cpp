@@ -119,7 +119,68 @@ namespace FasTag
       r.region_lo = static_cast<int>(pos + k);
       r.region_hi = static_cast<int>(L) - 1;
     }
+    // Stage B: interpret the localized gap as a mod or a substitution.
+    if (r.region_hi >= r.region_lo && std::fabs(r.delta_mass) > 1e-6)
+    {
+      const std::string region = pep.seq.substr(static_cast<size_t>(r.region_lo),
+                                                static_cast<size_t>(r.region_hi - r.region_lo + 1));
+      r.delta_interp = interpretDelta_(r.delta_mass, region);
+    }
     out.push_back(std::move(r));
+  }
+
+  std::string TagReconciler::interpretDelta_(double delta, const std::string& region) const
+  {
+    // Two hypotheses, both localized to `region`:
+    //   modification -- delta ~= a candidate mod's shift, and the region carries a
+    //                   residue that mod applies to;
+    //   substitution -- delta ~= mass(Y) - mass(X) for some residue X IN the region
+    //                   replaced by any residue Y. residue_masses_ carries fixed
+    //                   mods, matching how the database masses were computed, so
+    //                   the substitution delta is on the same scale as `delta`.
+    // The best fit (smallest mass error) wins; a modification breaks a near-tie
+    // because it is the more common explanation of a given mass shift.
+    const double tol = tolAt(std::fabs(delta) > 1.0 ? std::fabs(delta) : 200.0);
+    std::string best;
+    double best_err = tol;
+    bool best_is_mod = false;
+
+    for (const ModCandidate& m : mods_)
+    {
+      const double err = std::fabs(delta - m.delta);
+      if (err > tol) continue;
+      bool applies = m.residues.empty();
+      char site = 0;
+      if (!applies)
+        for (char c : region)
+          if (m.residues.find(c) != std::string::npos) { applies = true; site = c; break; }
+      if (!applies) continue;
+      if (err < best_err || (err <= best_err && !best_is_mod))
+      {
+        best_err = err; best_is_mod = true;
+        best = "mod:" + m.name + "@" + (site ? std::string(1, site) : region.substr(0, 1));
+      }
+    }
+
+    static const char AA[] = "GASPVTCLNDQKEMHFRYW";
+    for (char x : region)
+    {
+      const double mx = residue_masses_[static_cast<unsigned char>(x)];
+      if (mx <= 0) continue;
+      for (const char* y = AA; *y; ++y)
+      {
+        if (*y == x) continue;
+        const double my = residue_masses_[static_cast<unsigned char>(*y)];
+        if (my <= 0) continue;
+        const double err = std::fabs(delta - (my - mx));
+        if (err < best_err && !(best_is_mod && err >= best_err))  // mods win ties
+        {
+          best_err = err; best_is_mod = false;
+          best = std::string("sub:") + x + "->" + *y;
+        }
+      }
+    }
+    return best.empty() ? "?" : best;
   }
 
   std::vector<Reconciliation> TagReconciler::reconcile(const std::string& tag_in,
