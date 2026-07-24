@@ -24,12 +24,17 @@
 #include "FasTagger.h"
 #include "FastaFilter.h"
 #include "SpectrumSampler.h"
+#include "TaxIndex.h"
+#include "TaxStats.h"
 
 #include <fstream>
 #include <map>
 #include <limits>
 #include <memory>
+#include <algorithm>
+#include <iterator>
 #include <random>
+#include <set>
 #include <vector>
 
 #ifdef _OPENMP
@@ -233,6 +238,22 @@ protected:
     setMaxFloat_("subsample_fraction", 1.0);
     registerIntOption_("subsample_seed", "<n>", 1, "Seed for -subsample_* selection", false);
     setMinInt_("subsample_seed", 0);
+
+    // Taxonomic / species detection: throw the tags at a prebuilt tag->taxon
+    // index (buildtaxdb) and infer the taxa present by lowest-common-ancestor
+    // over the tag hits. A reduced reference set gives honest genus/family
+    // resolution; short peptide tags cannot resolve species. Pair with
+    // -subsample_* for a fast call on a large run.
+    registerInputFile_("taxdb", "<file>", "", "Tag->taxon index (built by buildtaxdb) for species detection", false);
+    registerInputFile_("taxonomy_nodes", "<file>", "", "NCBI taxonomy nodes.dmp (for -taxdb)", false);
+    registerInputFile_("taxonomy_names", "<file>", "", "NCBI taxonomy names.dmp (for -taxdb)", false);
+    registerOutputFile_("species_out", "<file>", "", "Ranked taxa TSV (requires -taxdb)", false);
+    setValidFormats_("species_out", ListUtils::create<String>("tsv"));
+    registerIntOption_("species_min_len", "<n>", 0,
+                       "Ignore tags shorter than this for taxonomy; 0 uses the index k", false);
+    setMinInt_("species_min_len", 0);
+    registerStringOption_("species_rank", "<rank>", "genus",
+                          "Report taxa at this NCBI rank (genus, family, ...)", false);
     registerDoubleOption_("max_evalue", "<value>", 20.0, "E-value cutoff; 0 disables", false);
     setMinFloat_("max_evalue", 0.0);
     registerDoubleOption_("gap_penalty", "<value>", 100.0,
@@ -772,6 +793,136 @@ protected:
       if (!out_spectra.empty()) kept.addSpectrum(kept_spec[i]);
     }
     tsv.close();
+
+    // Taxonomic / species detection from the tags.
+    //
+    // For every spectrum, the SET of taxa its tags support (a tag supports a
+    // taxon when every one of its k-mers is in that taxon -- intersection, so a
+    // longer tag is more specific). Each taxon is counted ONCE per spectrum, not
+    // per tag, so correlated tags from one spectrum cannot manufacture evidence.
+    // Roll the per-leaf counts up the taxonomy, compare each node against the
+    // breadth it has in the index, and rank. The q-value is a ranking aid, not a
+    // calibrated FDR: the per-k-mer background is a proxy and the chimeric-null
+    // problem (see F4 in doc/BACKLOG.md) applies here too.
+    const String taxdb = getStringOption_("taxdb");
+    const String species_out = getStringOption_("species_out");
+    if (!taxdb.empty() && !species_out.empty())
+    {
+      const String nodes = getStringOption_("taxonomy_nodes");
+      const String names = getStringOption_("taxonomy_names");
+      if (nodes.empty() || names.empty())
+      {
+        OPENMS_LOG_ERROR << "-taxdb needs -taxonomy_nodes and -taxonomy_names." << std::endl;
+        return ILLEGAL_PARAMETERS;
+      }
+      FasTag::TaxIndex idx;
+      std::string ierr;
+      if (!idx.load(taxdb, &ierr))
+      {
+        OPENMS_LOG_ERROR << "Failed to load -taxdb '" << taxdb << "': " << ierr << std::endl;
+        return INPUT_FILE_CORRUPT;
+      }
+      FasTag::Taxonomy tax;
+      std::string terr;
+      if (!tax.load(nodes, names, &terr))
+      {
+        OPENMS_LOG_ERROR << "Failed to load taxonomy: " << terr << std::endl;
+        return INPUT_FILE_CORRUPT;
+      }
+      const int kk = idx.k();
+      int min_len = getIntOption_("species_min_len");
+      if (min_len < kk) min_len = kk;
+
+      // Per-spectrum taxon support -> per-leaf spectrum counts.
+      std::map<uint32_t, uint64_t> hits;
+      size_t n_units = 0;
+      // Group the written rows by spectrum: field 0 = spectrum id, field 1 = tag.
+      std::map<std::string, std::vector<std::string>> by_spec;
+      for (size_t i = 0; i < rows.size(); ++i)
+      {
+        if (!keep[i]) continue;
+        const std::string& r = rows[i];
+        size_t start = 0;
+        while (start < r.size())
+        {
+          size_t nl = r.find('\n', start);
+          if (nl == std::string::npos) nl = r.size();
+          size_t t1 = r.find('\t', start);
+          if (t1 != std::string::npos && t1 < nl)
+          {
+            size_t t2 = r.find('\t', t1 + 1);
+            if (t2 != std::string::npos && t2 <= nl)
+              by_spec[r.substr(start, t1 - start)].push_back(r.substr(t1 + 1, t2 - t1 - 1));
+          }
+          start = nl + 1;
+        }
+      }
+      for (const auto& sp : by_spec)
+      {
+        std::set<uint32_t> taxa;  // taxa supported anywhere in this spectrum
+        for (const std::string& raw : sp.second)
+        {
+          const std::string seq = FasTag::baseSequence(raw);
+          if (static_cast<int>(seq.size()) < min_len) continue;
+          // Intersection of the tag's k-mer taxon sets: the taxon must carry the
+          // whole tag, not just one window.
+          std::vector<uint32_t> acc;
+          bool first = true;
+          const int L = static_cast<int>(seq.size());
+          for (int i = 0; i + kk <= L; ++i)
+          {
+            const std::vector<uint32_t>& t = idx.lookup(FasTag::TaxIndex::fold(seq.substr(static_cast<size_t>(i), static_cast<size_t>(kk))));
+            if (first) { acc = t; first = false; }
+            else
+            {
+              std::vector<uint32_t> tmp;
+              std::set_intersection(acc.begin(), acc.end(), t.begin(), t.end(), std::back_inserter(tmp));
+              acc.swap(tmp);
+            }
+            if (acc.empty()) break;
+          }
+          for (uint32_t tx : acc) taxa.insert(tx);
+        }
+        if (taxa.empty()) continue;
+        ++n_units;
+        for (uint32_t tx : taxa) ++hits[tx];
+      }
+
+      // Roll observed hits AND the index breadth up the tree, so each node's
+      // background is the breadth of its whole subtree.
+      std::vector<std::pair<uint32_t, uint64_t>> hit_pairs(hits.begin(), hits.end());
+      std::vector<std::pair<uint32_t, uint64_t>> post_pairs;
+      for (uint32_t tx : idx.taxa()) post_pairs.emplace_back(tx, idx.postings(tx));
+      const auto rolled = tax.rollUp(hit_pairs);
+      const auto rolled_post = tax.rollUp(post_pairs);
+      std::map<uint32_t, double> bg;
+      const double nk = static_cast<double>(std::max<uint64_t>(1, idx.nKmers()));
+      for (const auto& np : rolled_post) bg[np.taxid] = static_cast<double>(np.subtree_hits) / nk;
+      std::vector<std::pair<uint32_t, double>> bg_pairs(bg.begin(), bg.end());
+
+      const double qthr = 1.0;  // rank everything; the report shows q, caller thresholds
+      auto calls = tax.call(rolled, bg_pairs, static_cast<uint64_t>(n_units), qthr);
+
+      const String want_rank = getStringOption_("species_rank");
+      std::ofstream so(species_out.c_str());
+      so << "rank\ttaxid\tname\tobserved\texpected\tenrichment\tlog_pvalue\tqvalue\n";
+      size_t shown = 0;
+      for (const auto& c : calls)
+      {
+        if (c.rank != want_rank) continue;
+        const double enr = c.expected > 0 ? c.observed / c.expected : 999.0;
+        char line[512];
+        std::snprintf(line, sizeof line, "%s\t%u\t%s\t%llu\t%.1f\t%.1fx\t%g\t%g\n",
+                      c.rank.c_str(), c.taxid, c.name.c_str(),
+                      static_cast<unsigned long long>(c.observed), c.expected, enr,
+                      c.log_pvalue, c.qvalue);
+        so << line;
+        if (++shown >= 50) break;
+      }
+      so.close();
+      OPENMS_LOG_INFO << "Species: " << n_units << " spectra contributed taxon evidence; "
+                      << "top " << want_rank << " calls -> " << species_out << std::endl;
+    }
 
     OPENMS_LOG_INFO << n_ms2 << " MS2 spectra, " << n_tags << " tags";
     if (filtering) OPENMS_LOG_INFO << " -> " << n_reported << " after filtering";

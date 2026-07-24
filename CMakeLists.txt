@@ -146,6 +146,10 @@ if(_fastag_mzpeak)
 endif()
 install(TARGETS FasTag RUNTIME DESTINATION bin)
 
+add_executable(buildtaxdb src/buildtaxdb.cpp)
+target_link_libraries(buildtaxdb PRIVATE fastag_core)
+install(TARGETS buildtaxdb RUNTIME DESTINATION bin)
+
 option(FASTAG_BUILD_BENCH "Build the synthetic benchmark" ON)
 if(FASTAG_BUILD_BENCH)
   add_executable(benchmark bench/benchmark.cpp)
