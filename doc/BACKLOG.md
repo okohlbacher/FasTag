@@ -269,7 +269,7 @@ Candidate features, with verdicts (ADOPT / MAYBE / SKIP):
 | F1 | Flank-mass reconciliation, delta = mod/mutation | open/blind PTM, variants | ADOPT — this is TagRecon stage A+; validated by PIPI2 (2024), Open-pFind |
 | F2 | FM-/substring index for tag→DB lookup | scale of F1 | ADOPT — reuse a succinct-index lib; enabling substrate |
 | F3 | Gap tags (mass-gap residues) | noisy/ion-starved spectra | ADOPT (already have `-gaps`); cap at 1 |
-| F4 | **Calibrated tag confidence / per-residue FDR** | rescoring, taxonomy, variant QC | ADOPT — foundational; differentiating; build first |
+| F4 | **Calibrated tag confidence / per-residue FDR** | rescoring, taxonomy, variant QC | PARTLY DONE — E-value validated + per-residue `min_conf`/`mean_conf` shipped; true decoy q-value is research-grade (see below) |
 | F5 | Mass-shift localization (shifted-fragment method) | open PTM; the mod-localization roadmap | ADOPT for localization; interoperate with PTM-Shepherd, don't reimplement |
 | F6 | Multi-length tags as a recall/specificity knob | DB search, HLA, taxonomy | ADOPT — but default recall-y (short); long tags opt-in |
 | F7 | Tag-agreement features for MS2Rescore/Oktoberfest | rescoring (+10-30% IDs) | ADOPT — cheap, high-ROI, repositions FasTag as a feature source |
@@ -292,3 +292,34 @@ a substring index — the core extension, already begun as TagRecon stage A),
 Several F1/F5/F8 items are already under way (TagRecon stage A; the modification
 support in v0.13.0; the species detector on `feature/species-detector`). F4, F7
 and F13 are the highest-leverage *not-yet-started* items.
+
+## F4 tag confidence — E-value validated, per-residue shipped, decoy FDR deferred
+
+Two of the three parts of F4 landed; the third is a documented research problem.
+
+**Shipped.** The `evalue` was validated as a strong per-tag confidence on real
+identifications (PXD000001, 1% FDR PSMs, TMT/Methylthio fixed mods): correct
+tags separate from incorrect by ~400x in the median E-value (0.006 vs 2.306),
+and the best-E-value tag per spectrum is correct **88.5%** of the time. Two new
+output columns, `min_conf` and `mean_conf` (both in [0,1], higher better), score
+each residue's own support as m/z-fit x endpoint-intensity, so `min_conf`
+localises the weakest residue — correct tags carry ~0.45 median `min_conf`
+against ~0.17 for incorrect, and ranking by `mean_conf` alone recovers 86.5%
+rank-1, nearly matching the E-value. Cheap (computed during scoring) and
+always on.
+
+**Deferred, and why.** A calibrated per-tag *q-value / FDR* was attempted via a
+target-decoy scheme (tag decoy spectra, read the false-positive rate off the
+decoy E-value distribution) and **does not calibrate with a single-spectrum
+decoy**. Both a uniform-random-m/z decoy and a gap-shuffle decoy produce an
+essentially empty null — q collapses to ~0 for every tag — because FasTag's real
+false tags are not random-peak coincidences but reads of *chimeric co-isolated
+peptides* and real noise structure (the 66,516 "incorrect" tags on PXD000001
+have median E-value 2.3, i.e. they are real-ladder reads that simply do not
+match the one identified peptide). Destroying one spectrum's ladder cannot
+reproduce those. This matches the literature: de novo / tag FDR is its own
+research topic (NovoBoard, Winnow). A real q-value needs a chimeric-aware or
+entrapment null, or a reconcile-to-peptide-first target-decoy — tracked, not
+shipped, so no miscalibrated FDR reaches users. The `TagFDR` machinery (an
+empirical target-decoy q-curve) was written and unit-tested but is not wired in
+until a null that calibrates exists.

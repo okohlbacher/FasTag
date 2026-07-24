@@ -195,8 +195,21 @@ core performance lever), `-ini <file>` / `-write_ini <file>` (parameter files),
 
 One TSV row per tag: `spectrum` (native ID), `tag` (sequence), `length`,
 `charge` (fragment charge), `nterm_mass` / `cterm_mass` (flanking masses,
-4-decimal precision), `extended` / `gapped` (flags), `evalue`, and `fasta_hit`
+4-decimal precision), `extended` / `gapped` (flags), `evalue`, `min_conf` /
+`mean_conf` (per-residue confidence, see below), and `fasta_hit`
 (`fwd` / `rev` / `-`, present only with `-fasta`).
+
+**Tag confidence.** The `evalue` is the primary, validated confidence — lower is
+better, and on real identifications (PXD000001) it separates correct from
+incorrect tags by roughly 400x in the median, with the best-E-value tag per
+spectrum correct ~88% of the time. `min_conf` and `mean_conf` (both in [0,1],
+higher better) score each residue's own support — m/z fit times endpoint peak
+intensity — so `min_conf` localises the residue most likely wrong, which the
+single E-value cannot; correct tags carry a markedly higher `min_conf` than
+incorrect ones (~0.45 vs ~0.17 median). A calibrated per-tag *q-value/FDR* is
+deliberately **not** emitted: a defensible null has to reproduce the chimeric
+false tags real spectra generate, which a single-spectrum decoy does not — see
+[doc/BACKLOG.md](doc/BACKLOG.md).
 
 ## Demo data
 
