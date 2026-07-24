@@ -140,6 +140,9 @@ export interface RunHandle {
   child: ChildProcess
   args: string[]
   exited: boolean
+  // Set when the window that owns this run reloaded/closed: its callbacks must
+  // stop reporting to the (surviving) WebContents, which now hosts a new run.
+  abandoned: boolean
 }
 
 export interface RunCallbacks {
@@ -189,12 +192,19 @@ export function runFastag(params: RunParams, cb: RunCallbacks): RunHandle {
   // and a normal exit emits only 'close'. Fire the terminal callback for the
   // first of the two, so a run never resolves twice (which, upstream, could
   // resolve the NEXT job's awaiter with this job's result).
-  const handle: RunHandle = { child, args, exited: false }
+  const handle: RunHandle = { child, args, exited: false, abandoned: false }
   let settled = false
+  let spawned = false
+  child.on('spawn', () => { spawned = true })
   child.on('error', (e) => {
-    // 'error' does NOT mean the process ended -- it also fires on a failed
-    // kill() while the child keeps running. Do NOT set exited here, or a
-    // kill-error would suppress the SIGKILL escalation. Only 'close' proves exit.
+    // A pre-spawn 'error' (ENOENT etc.) is terminal: 'close' will never fire, so
+    // this is the only signal. A post-spawn 'error' is NOT terminal -- it fires
+    // on a failed kill() while the child keeps running, so it must not settle
+    // the run or set exited (which would suppress SIGKILL). Let 'close' end it.
+    if (spawned) {
+      cb.onLog(`process error: ${e.message}`)
+      return
+    }
     if (settled) return
     settled = true
     cb.onError(e.message)

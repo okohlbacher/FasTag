@@ -29,8 +29,12 @@ function createWindow(): void {
   win.on('ready-to-show', () => win.show())
 
   // Killing the window (close or reload) must not orphan a running CLI process.
+  // A reload keeps the same WebContents, so mark the run abandoned: its later
+  // callbacks must not report to the renderer that now hosts a *new* run (a
+  // stale, smaller run id would corrupt the new run's state).
   const killOrphan = (): void => {
     if (currentRun) {
+      currentRun.abandoned = true
       cancelRun(currentRun)
       currentRun = null
     }
@@ -95,14 +99,15 @@ ipcMain.handle('fastag:run', (e, params: RunParams) => {
   if (currentRun) return { started: false, reason: 'a run is already in progress' }
   const wc = e.sender
   const runId = ++runSeq
-  // Sending to a destroyed WebContents throws "Object has been destroyed" and
-  // would take down the main process; a run whose window closed/reloaded still
-  // emits log + terminal callbacks, so every send is guarded.
-  const send = (channel: string, payload: unknown): void => {
-    if (!wc.isDestroyed()) wc.send(channel, payload)
-  }
   // The GUI always wants machine-readable progress; force the flag on.
   let handle: RunHandle | null = null
+  // Two ways a send can go wrong: the window was destroyed (close -> throws
+  // "Object has been destroyed", crashing main), or the window reloaded and its
+  // WebContents survives but now hosts a different run (abandoned -> a stale
+  // event would corrupt the new run's state). Guard both.
+  const send = (channel: string, payload: unknown): void => {
+    if (!wc.isDestroyed() && !(handle && handle.abandoned)) wc.send(channel, payload)
+  }
   // Clear currentRun only if it is still OURS: a stale run that ignored SIGTERM
   // can exit after a reload started a new run, and an unconditional null would
   // steal the new run's ownership (cancel could no longer stop it).
