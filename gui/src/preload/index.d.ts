@@ -45,7 +45,17 @@ export interface TaxdbInfo {
   kmers: number
 }
 
+export interface Settings {
+  schemaVersion: number
+  lastUsed: Record<string, unknown> | null
+  presets: Record<string, Record<string, unknown>>
+}
+
 export interface FastagApi {
+  loadSettings: () => Promise<Settings>
+  saveLast: (values: Record<string, unknown>) => Promise<boolean>
+  savePreset: (name: string, values: Record<string, unknown>) => Promise<boolean>
+  deletePreset: (name: string) => Promise<boolean>
   taxdbInfo: (explicit?: string) => Promise<TaxdbInfo | null>
   species: (path: string) => Promise<SpeciesReport | null>
   openTaxon: (taxid: number) => Promise<boolean>

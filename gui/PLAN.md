@@ -36,7 +36,7 @@ Pick one file → set core params (tag_length, fragment_tolerance + **unit**,
 max_tags) → run → streamed stderr log → **bounded** result preview (first N rows).
 Cancel kills the process tree. Defaults mirror the CLI exactly.
 
-### P2 — parameter contract + presets
+### P2 — parameter contract + presets ✅ (presets + last-used done)
 - Build-time `-write_ini` → `params.manifest.json` (name, type, default,
   restrictions, description, advanced flag). CI fails if the tool and manifest
   disagree.

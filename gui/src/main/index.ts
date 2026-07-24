@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { probeBinary, resolveBinary, runFastag, cancelRun, RunHandle, RunParams } from './fastag'
 import { previewTsv } from './preview'
 import { readSpecies, readTaxdbInfo, bundledTaxdb } from './species'
+import { loadSettings, saveLastUsed, savePreset, deletePreset } from './settings'
 
 // One in-flight run for the P0/P1 skeleton (batch queue comes later).
 let currentRun: RunHandle | null = null
@@ -90,6 +91,11 @@ ipcMain.handle('fastag:cancel', () => {
 })
 
 ipcMain.handle('fastag:preview', (_e, path: string, maxRows?: number) => previewTsv(path, maxRows))
+
+ipcMain.handle('settings:load', () => loadSettings())
+ipcMain.handle('settings:saveLast', (_e, values: Record<string, unknown>) => saveLastUsed(values))
+ipcMain.handle('settings:savePreset', (_e, name: string, values: Record<string, unknown>) => savePreset(name, values))
+ipcMain.handle('settings:deletePreset', (_e, name: string) => deletePreset(name))
 
 ipcMain.handle('fastag:species', (_e, path: string) => readSpecies(path))
 

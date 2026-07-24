@@ -284,3 +284,6 @@ th, td {
 th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
 .empty { padding: 24px; color: var(--muted); }
 .trunc { padding: 8px 14px; color: var(--muted); font-size: 11px; }
+
+.presets { display: flex; gap: 6px; margin: 10px 0 4px; }
+.presets select, .presets input { flex: 1; padding: 6px 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); font: inherit; font-size: 12px; }

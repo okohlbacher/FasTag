@@ -11,6 +11,10 @@ const api = {
   preview: (path: string, maxRows?: number) => ipcRenderer.invoke('fastag:preview', path, maxRows),
   species: (path: string) => ipcRenderer.invoke('fastag:species', path),
   taxdbInfo: (explicit?: string) => ipcRenderer.invoke('fastag:taxdbInfo', explicit),
+  loadSettings: () => ipcRenderer.invoke('settings:load'),
+  saveLast: (values: unknown) => ipcRenderer.invoke('settings:saveLast', values),
+  savePreset: (name: string, values: unknown) => ipcRenderer.invoke('settings:savePreset', name, values),
+  deletePreset: (name: string) => ipcRenderer.invoke('settings:deletePreset', name),
   openTaxon: (taxid: number) => ipcRenderer.invoke('fastag:openTaxon', taxid),
 
   // Streamed events. Return an unsubscribe so the renderer can clean up.

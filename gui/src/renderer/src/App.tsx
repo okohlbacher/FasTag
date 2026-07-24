@@ -51,6 +51,9 @@ export default function App(): JSX.Element {
   const [species, setSpecies] = useState<SpeciesReport | null>(null)
   const [tab, setTab] = useState<'results' | 'species'>('results')
   const [taxdbK, setTaxdbK] = useState<number | null>(null)
+  const [presets, setPresets] = useState<string[]>([])
+  const [preset, setPreset] = useState('')
+  const [savingName, setSavingName] = useState<string | null>(null)  // non-null = the 'save as' input is open
   // Parsed from the CLI's own summary line, so the panel reports what the run
   // actually did rather than a number the GUI guessed.
   const [evidence, setEvidence] = useState<{ contributed: number | null; ms2: number | null }>({
@@ -76,6 +79,13 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     window.fastag.probe().then(setBin)
+    window.fastag.loadSettings().then((st) => {
+      setPresets(Object.keys(st.presets).sort())
+      // Restore the last session's parameters (but not in/out paths -- those are
+      // per-run). Merge over defaults so a new CLI option added since last launch
+      // still gets its default rather than undefined.
+      if (st.lastUsed) setValues((v) => ({ ...v, ...(st.lastUsed as Record<string, ParamValue>) }))
+    })
   }, [])
 
   // Re-read whenever the user points at a different index.
@@ -145,6 +155,7 @@ export default function App(): JSX.Element {
     setPreview(null)
     setProgress(null)
     setRunning(true)
+    window.fastag.saveLast(values)   // remember this run's parameters for next launch
     // Only the parameters the UI actually renders. The form seeds a value for
     // every manifest entry, but HIDDEN ones must never reach the command line:
     // `-version` is recorded in the INI yet rejected as an option, so sending
@@ -160,6 +171,30 @@ export default function App(): JSX.Element {
 
   function resetDefaults(): void {
     setValues(initialValues())
+  }
+
+  async function applyPreset(name: string): Promise<void> {
+    setPreset(name)
+    if (!name) return
+    const st = await window.fastag.loadSettings()
+    const pv = st.presets[name]
+    if (pv) setValues((v) => ({ ...v, ...(pv as Record<string, ParamValue>) }))
+  }
+  async function commitPreset(): Promise<void> {
+    const name = (savingName ?? '').trim()
+    if (!name) { setSavingName(null); return }
+    await window.fastag.savePreset(name, values)   // window.prompt is unsupported in Electron; inline input instead
+    const st = await window.fastag.loadSettings()
+    setPresets(Object.keys(st.presets).sort())
+    setPreset(name)
+    setSavingName(null)
+  }
+  async function removePreset(): Promise<void> {
+    if (!preset) return
+    await window.fastag.deletePreset(preset)
+    const st = await window.fastag.loadSettings()
+    setPresets(Object.keys(st.presets).sort())
+    setPreset('')
   }
 
   const canRun = bin?.ok && !!input && !!out && !running
@@ -207,6 +242,33 @@ export default function App(): JSX.Element {
           <div className="sep" />
 
           {CORE.map(field)}
+
+          <div className="presets">
+            {savingName === null ? (
+              <>
+                <select value={preset} onChange={(e) => applyPreset(e.target.value)} title="Load a saved preset">
+                  <option value="">Presets…</option>
+                  {presets.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+                <button className="secondary slim" onClick={() => setSavingName(preset || '')}>Save as…</button>
+                <button className="secondary slim" onClick={removePreset} disabled={!preset}>Delete</button>
+              </>
+            ) : (
+              <>
+                <input
+                  autoFocus
+                  value={savingName}
+                  placeholder="preset name"
+                  onChange={(e) => setSavingName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') commitPreset(); if (e.key === 'Escape') setSavingName(null) }}
+                />
+                <button className="slim" onClick={commitPreset}>Save</button>
+                <button className="secondary slim" onClick={() => setSavingName(null)}>Cancel</button>
+              </>
+            )}
+          </div>
 
           <div className="adv">
             <button className="disclosure" onClick={() => setAdvOpen((o) => !o)} aria-expanded={advOpen}>
