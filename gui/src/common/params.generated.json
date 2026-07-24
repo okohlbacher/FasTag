@@ -197,6 +197,14 @@
       "min": 0
     },
     {
+      "name": "proforma",
+      "type": "bool",
+      "default": "false",
+      "description": "Append a ProForma 2.0 column ([+nterm]-SEQ-[+cterm]) for each tag",
+      "required": false,
+      "toppAdvanced": false
+    },
+    {
       "name": "progress",
       "type": "bool",
       "default": "false",

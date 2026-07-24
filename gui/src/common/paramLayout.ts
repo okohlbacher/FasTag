@@ -41,6 +41,7 @@ export const CORE: string[] = [
 
 /// Everything else worth exposing, grouped inside the Advanced accordion.
 export const GROUPS: { title: string; params: string[] }[] = [
+  { title: 'Output', params: ['proforma'] },
   { title: 'Peak selection', params: ['max_peaks', 'peaks_per_window'] },
   {
     title: 'Scoring & ranking',
