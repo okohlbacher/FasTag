@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="FASTag">
+  <title>FASTag</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#20232b"/>
+      <stop offset="1" stop-color="#111219"/>
+    </linearGradient>
+    <linearGradient id="ftTag" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#4f8cff"/>
+      <stop offset="1" stop-color="#9d7bff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Dark rounded-square background (macOS masks to a squircle). -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+
+  <!-- The FASTag mark from logo.svg (64x64), scaled 10x and centred. -->
+  <g transform="translate(182,162) scale(10)">
+    <!-- The spectrum: muted peaks — the evidence, not the answer. -->
+    <g fill="#7d8694">
+      <rect x="6"  y="38" width="3" height="16" rx="1.5"/>
+      <rect x="13" y="45" width="3" height="9"  rx="1.5"/>
+      <rect x="20" y="27" width="3" height="27" rx="1.5"/>
+      <rect x="28" y="33" width="3" height="21" rx="1.5"/>
+      <rect x="36" y="17" width="3" height="37" rx="1.5"/>
+      <rect x="44" y="29" width="3" height="25" rx="1.5"/>
+      <rect x="52" y="43" width="3" height="11" rx="1.5"/>
+      <rect x="58" y="48" width="3" height="6"  rx="1.5"/>
+    </g>
+    <!-- The tag: the inferred path across consecutive peaks — carries the colour. -->
+    <path d="M21.5 27 L29.5 33 L37.5 17 L45.5 29"
+          fill="none" stroke="url(#ftTag)" stroke-width="3.2"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <g fill="url(#ftTag)">
+      <circle cx="21.5" cy="27" r="3.4"/>
+      <circle cx="29.5" cy="33" r="3.4"/>
+      <circle cx="37.5" cy="17" r="3.4"/>
+      <circle cx="45.5" cy="29" r="3.4"/>
+    </g>
+  </g>
+</svg>

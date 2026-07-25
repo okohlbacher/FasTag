@@ -113,6 +113,22 @@ matters for your deployment.
 Building from source needs OpenMS ≥ 3.5 and CMake; see
 [doc/BACKLOG-ci.md](doc/BACKLOG-ci.md) for what each platform requires.
 
+## Desktop GUI
+
+A cross-platform desktop app ([`gui/`](gui/)) wraps the CLI: pick spectra, set
+parameters from a form generated out of the tool's own `-write_ini`, watch a
+progress bar, and browse the tags and the ranked species report (with a `rel.`
+column showing each taxon's evidence relative to the top hit). It is built with
+[Tauri 2](https://tauri.app) — a Rust backend and the OS's native webview, not a
+bundled browser. The CLI remains the source of truth; the GUI shells out to it.
+
+```bash
+cd gui && npm install && npm run tauri dev     # or: npm run tauri build
+```
+
+Signed, installable bundles are still on the roadmap (see `doc/BACKLOG.md`); for
+now the app is built from source. Details in [gui/README.md](gui/README.md).
+
 ## Usage
 
 ```bash
