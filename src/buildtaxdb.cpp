@@ -1,4 +1,4 @@
-// Build a FasTag taxonomic k-mer index from a directory of per-taxon FASTA files.
+// Build a FASTag taxonomic k-mer index from a directory of per-taxon FASTA files.
 //
 // Each input file is named <taxid>.fasta and holds one organism's proteins; the
 // taxid is taken from the filename, so no header parsing is needed. All proteins
@@ -40,8 +40,8 @@ int main(int argc, char** argv)
   const std::string out = argv[2];
   const int k = argc > 3 ? std::atoi(argv[3]) : 7;
   // Upper bound is TaxIndex::MAX_K: base-19 codes overflow a uint64 beyond it.
-  if (k < 3 || k > FasTag::TaxIndex::MAX_K)
-  { std::cerr << "k out of range (3.." << FasTag::TaxIndex::MAX_K << ")\n"; return 2; }
+  if (k < 3 || k > FASTag::TaxIndex::MAX_K)
+  { std::cerr << "k out of range (3.." << FASTag::TaxIndex::MAX_K << ")\n"; return 2; }
 
   std::vector<FASTAFile::FASTAEntry> entries;
   std::vector<uint32_t> taxids;
@@ -70,7 +70,7 @@ int main(int argc, char** argv)
 
   std::cerr << "building k=" << k << " index over " << entries.size()
             << " proteins from " << files << " taxa...\n";
-  FasTag::TaxIndex idx;
+  FASTag::TaxIndex idx;
   idx.build(entries, taxids, k);
   std::cerr << "  " << idx.nKmers() << " distinct k-mers, " << idx.taxa().size() << " taxa\n";
 

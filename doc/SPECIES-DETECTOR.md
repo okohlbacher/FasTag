@@ -1,6 +1,6 @@
 # Species / taxonomic detection
 
-FasTag can infer the taxa present in a run directly from its tags — no database
+FASTag can infer the taxa present in a run directly from its tags — no database
 search — by matching tag k-mers against a prebuilt tag→taxon index and ranking
 taxa by lowest-common-ancestor evidence. Kraken-2-for-peptide-tags, over a
 **reduced** reference set so the resolution is honestly genus/family.
@@ -12,7 +12,7 @@ taxa by lowest-common-ancestor evidence. Kraken-2-for-peptide-tags, over a
 buildtaxdb proteomes/ ref.taxdb 7        # k=7
 
 # 2. Detect, alongside normal tagging (subsample for speed on big runs)
-FasTag -in run.mzML -out tags.tsv -tag_length 7 \
+FASTag -in run.mzML -out tags.tsv -tag_length 7 \
        -taxdb ref.taxdb -taxonomy_nodes nodes.dmp -taxonomy_names names.dmp \
        -species_out taxa.tsv -species_rank genus -subsample_fraction 0.2
 ```

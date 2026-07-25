@@ -41,7 +41,7 @@ static std::vector<std::vector<std::string>> aggregateFile(
   std::ifstream input(path);
   std::ostringstream output;
   std::string error;
-  const bool ok = FasTag::TagFeatures::aggregate(input, output, &error);
+  const bool ok = FASTag::TagFeatures::aggregate(input, output, &error);
   CHECK(ok, "aggregation failed: %s", error.c_str());
 
   std::istringstream result(output.str());

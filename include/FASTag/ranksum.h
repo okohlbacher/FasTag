@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Oliver Kohlbacher and contributors
 // SPDX-License-Identifier: MIT
 //
-// This is the one piece of mathematics FasTag keeps in-house: neither OpenMS nor
+// This is the one piece of mathematics FASTag keeps in-house: neither OpenMS nor
 // Boost provides the exact null of a rank sum over distinct ranks. Boost offers
 // the normal approximation to Mann-Whitney, which is not usable here because the
 // interesting tags sit far in the tail, where that approximation is worst.
@@ -18,7 +18,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace FasTag
+namespace FASTag
 {
   /// Number of distinct-rank subsets summing to each value:
   /// counts[s] = #{ S subset of {1..n} : |S| = k, sum(S) = s }.

@@ -1,4 +1,4 @@
-// FasTag -- partial sequence tags from peptide MS/MS spectra.
+// FASTag -- partial sequence tags from peptide MS/MS spectra.
 //
 // Copyright (c) 2026 Oliver Kohlbacher and contributors
 // SPDX-License-Identifier: MIT
@@ -13,13 +13,13 @@
 
 #include <OpenMS/KERNEL/MSSpectrum.h>
 
-#include <FasTag/ranksum.h>
+#include <FASTag/ranksum.h>
 
 #include <memory>
 #include <string>
 #include <vector>
 
-namespace FasTag
+namespace FASTag
 {
   struct Alphabet;  ///< residue/pair tables built from Param.mods; defined in the .cpp
 

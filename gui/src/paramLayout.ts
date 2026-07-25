@@ -6,7 +6,7 @@
 // a human judgement about which knobs a user reaches for.
 //
 // TOPP's own advanced="true" flag is not usable for this split -- it marks only
-// TOPPBase boilerplate (log, debug, force, test, ...) and leaves every FasTag
+// TOPPBase boilerplate (log, debug, force, test, ...) and leaves every FASTag
 // parameter, including deep internals like gap_penalty, marked non-advanced.
 
 import manifest from './params.generated.json'

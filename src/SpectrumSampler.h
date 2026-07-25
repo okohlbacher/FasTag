@@ -17,7 +17,7 @@
 #include <random>
 #include <vector>
 
-namespace FasTag
+namespace FASTag
 {
   /// A 0/1 mask over [0, n_total): mask[i] != 0 iff spectrum i is selected.
   using SampleMask = std::vector<char>;

@@ -1,4 +1,4 @@
-// tagfeatures converts FasTag's one-row-per-tag TSV output into a deterministic
+// tagfeatures converts FASTag's one-row-per-tag TSV output into a deterministic
 // one-row-per-spectrum feature table for joining tag evidence to downstream PSM
 // rescoring inputs; it is intentionally standalone and uses only the C++ standard
 // library.
@@ -169,7 +169,7 @@ struct Aggregate
 
 } // namespace
 
-namespace FasTag
+namespace FASTag
 {
 namespace TagFeatures
 {
@@ -273,7 +273,7 @@ bool aggregate(std::istream& input, std::ostream& output, std::string* error)
 }
 
 } // namespace TagFeatures
-} // namespace FasTag
+} // namespace FASTag
 
 #ifndef TAGFEATURES_NO_MAIN
 int main(int argc, char** argv)
@@ -298,7 +298,7 @@ int main(int argc, char** argv)
   }
 
   std::string error;
-  if (!FasTag::TagFeatures::aggregate(input, output, &error))
+  if (!FASTag::TagFeatures::aggregate(input, output, &error))
   {
     std::cerr << "tagfeatures: " << error << '\n';
     return 1;

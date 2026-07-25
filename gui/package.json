@@ -1,84 +1,35 @@
 {
   "name": "fastag-gui",
-  "version": "0.18.0",
-  "description": "Cross-platform desktop GUI for the FasTag mass-spectrometry sequence tagger",
+  "private": true,
+  "version": "0.19.0",
+  "description": "Cross-platform desktop GUI for the FASTag mass-spectrometry sequence tagger (Tauri)",
   "author": "Oliver Kohlbacher and contributors",
   "license": "MIT",
-  "main": "./out/main/index.js",
+  "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "start": "electron-vite preview",
-    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
-    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "pack:dir": "electron-vite build && electron-builder --dir",
-    "dist": "electron-vite build && electron-builder",
-    "params": "node scripts/gen-params.mjs resources/fastag/bin/FasTag > src/common/params.generated.json"
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri",
+    "params": "node scripts/gen-params.mjs src-tauri/resources/fastag/bin/FASTag > src/params.generated.json"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^33.3.1",
-    "electron-builder": "^25.1.8",
-    "electron-vite": "^2.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-opener": "^2"
+  },
+  "devDependencies": {
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@types/node": "^22.10.5",
-    "typescript": "^5.7.3",
-    "vite": "^5.4.11"
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4",
+    "@tauri-apps/cli": "^2"
   },
-  "build": {
-    "appId": "de.openms.fastag",
-    "productName": "FasTag",
-    "directories": {
-      "buildResources": "build"
-    },
-    "files": [
-      "out/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "resources/fastag",
-        "to": "fastag"
-      }
-    ],
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "category": "public.app-category.developer-tools",
-      "icon": "build/icon.png"
-    },
-    "win": {
-      "target": "nsis",
-      "icon": "build/icon.png"
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Science",
-      "icon": "build/icon.png"
-    }
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }

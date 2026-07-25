@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch UniProt reference proteomes for the FasTag species reference set.
+"""Fetch UniProt reference proteomes for the FASTag species reference set.
 
   fetch_reference_set.py data/taxonomy/reference-set.tsv <out_dir>
 

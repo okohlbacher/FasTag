@@ -1,4 +1,4 @@
-// FasTag benchmark: synthetic spectra with exact ground truth, plus the
+// FASTag benchmark: synthetic spectra with exact ground truth, plus the
 // calibration tool that ties them to real acquisitions.
 //
 //   benchmark stats <file.mzML> [tol_ppm]   measure a real file
@@ -28,7 +28,7 @@
 // Ladder edge density (the fraction of peaks with another peak exactly one
 // residue mass away) is the right target because it is the structural property
 // tagging consumes, and it needs no identifications to measure.
-#include "FasTagger.h"
+#include "FASTagger.h"
 
 #include <OpenMS/CHEMISTRY/AASequence.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
@@ -54,7 +54,7 @@ using namespace OpenMS;
 
 namespace
 {
-  // The 19 residues FasTag spells with: 20 standard amino acids minus I, which
+  // The 19 residues FASTag spells with: 20 standard amino acids minus I, which
   // is isobaric with L and folded onto it everywhere in this project.
   const char* ALPHABET = "AGSPVTCLNDQKEMHFRYW";
 
@@ -446,7 +446,7 @@ int main(int argc, char** argv)
   const int max_tags = argc > 10 ? std::atoi(argv[10]) : 50;
   const int ppw      = argc > 11 ? std::atoi(argv[11]) : 0;
 
-  FasTag::Param p;
+  FASTag::Param p;
   p.tag_length = tag_len;
   p.max_gaps = gaps;
   p.max_extension = ext;
@@ -459,7 +459,7 @@ int main(int argc, char** argv)
   p.max_evalue = maxev;
   p.max_tag_count = max_tags;
   p.peaks_per_window = ppw;
-  const FasTag::Tables tables(p);
+  const FASTag::Tables tables(p);
 
   Score sc;
   // One RNG for the whole run, seeded from the profile name, so a given
@@ -472,7 +472,7 @@ int main(int argc, char** argv)
     double prec_mz = 0; int z = 2;
     const MSSpectrum s = synth(pep, *pf, rng, prec_mz, z);
 
-    const std::vector<FasTag::Tag> tags = FasTag::tagSpectrum(s, prec_mz, z, p, tables);
+    const std::vector<FASTag::Tag> tags = FASTag::tagSpectrum(s, prec_mz, z, p, tables);
     ++sc.spectra;
     if (tags.empty()) continue;
     ++sc.tagged;

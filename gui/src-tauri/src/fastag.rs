@@ -1,4 +1,4 @@
-// FasTag CLI integration: locate the binary, run it, stream its stderr as
+// FASTag CLI integration: locate the binary, run it, stream its stderr as
 // events, and cancel by killing the child. Ported from the Electron main
 // process (gui/src/main/fastag.ts); the frontend contract is identical.
 //
@@ -24,9 +24,9 @@ const MANIFEST: &str = include_str!("../../src/params.generated.json");
 
 fn exe_name() -> &'static str {
     if cfg!(windows) {
-        "FasTag.exe"
+        "FASTag.exe"
     } else {
-        "FasTag"
+        "FASTag"
     }
 }
 
@@ -74,7 +74,7 @@ pub struct RunParams {
 pub struct Resolved {
     pub bin: PathBuf,
     pub data: Option<PathBuf>,
-    // The bundled taxonomy dir (share/FasTag/taxonomy), if present. Passed to the
+    // The bundled taxonomy dir (share/FASTag/taxonomy), if present. Passed to the
     // child as FASTAG_TAXONOMY_DIR so -species works without depending on the
     // CLI's own <bin>/../share path arithmetic (which a copied/symlinked binary
     // can get wrong).
@@ -105,7 +105,7 @@ pub fn resolve_binary(app: &AppHandle) -> Resolved {
         if bin.exists() {
             let data = root.join("share").join("OpenMS");
             let data = if data.exists() { Some(data) } else { None };
-            let taxonomy = root.join("share").join("FasTag").join("taxonomy");
+            let taxonomy = root.join("share").join("FASTag").join("taxonomy");
             let taxonomy = if taxonomy.join("tax_k7.taxdb").exists() { Some(taxonomy) } else { None };
             return Resolved { bin, data, taxonomy, source: "bundled" };
         }
@@ -145,7 +145,7 @@ pub fn probe(app: AppHandle) -> BinaryInfo {
             );
             let version = parse_version(&text);
             let detail = match &version {
-                Some(v) => format!("FasTag {v} ({})", r.source),
+                Some(v) => format!("FASTag {v} ({})", r.source),
                 None => format!("runs, version unknown ({})", r.source),
             };
             BinaryInfo { bin: bin_s, data_path: data_s, source: r.source.into(), ok: true, version, detail }

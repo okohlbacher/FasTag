@@ -8,7 +8,7 @@
 #include <limits>
 #include <string>
 
-using FasTag::toProforma;
+using FASTag::toProforma;
 
 static int failures = 0;
 static void check(bool ok, const std::string& what)
@@ -18,7 +18,7 @@ static void check(bool ok, const std::string& what)
 
 int main()
 {
-  // Both flanks; note L is rendered J (FasTag folds I->L, so L means "I or L").
+  // Both flanks; note L is rendered J (FASTag folds I->L, so L means "I or L").
   check(toProforma("WPNVVNP", 86.0027, 156.0947) == "[+86.0027]-WPNVVNP-[+156.0947]",
         "both flanks, no L");
   check(toProforma("GLPSL", 100.0, 200.0) == "[+100.0000]-GJPSJ-[+200.0000]", "L rendered as J");

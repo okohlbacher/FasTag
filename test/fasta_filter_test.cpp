@@ -43,7 +43,7 @@ int main()
 
   // 1. soundness and completeness against a naive substring oracle
   {
-    FasTag::FastaFilter f(true);
+    FASTag::FastaFilter f(true);
     std::string err;
     CHECK(f.load(entries({prot}), &err), "load failed: %s", err.c_str());
     f.setMinLen(8);
@@ -56,14 +56,14 @@ int main()
       for (int j = 0; j < 8; ++j) t.push_back(alpha[pick(rng)]);
       const std::string ft = fold(t), rev(ft.rbegin(), ft.rend());
       const bool want = p.find(ft) != std::string::npos || p.find(rev) != std::string::npos;
-      const bool got = f.match(t) != FasTag::FastaFilter::Hit::None;
+      const bool got = f.match(t) != FASTag::FastaFilter::Hit::None;
       if (want != got) ++wrong;
       ++checked;
     }
     // and every genuine 8-mer of the protein must be found
     int missed = 0;
     for (size_t i = 0; i + 8 <= prot.size(); i += 37)
-      if (f.match(prot.substr(i, 8)) == FasTag::FastaFilter::Hit::None) ++missed;
+      if (f.match(prot.substr(i, 8)) == FASTag::FastaFilter::Hit::None) ++missed;
     CHECK(wrong == 0, "%d/%d random tags misclassified", wrong, checked);
     CHECK(missed == 0, "%d genuine 8-mers not found", missed);
     std::printf("1. soundness+completeness vs naive oracle: %d random tags, 0 errors\n", checked);
@@ -73,12 +73,12 @@ int main()
   {
     const std::string sub = prot.substr(100, 9);
     std::string rev(sub.rbegin(), sub.rend());
-    FasTag::FastaFilter both(true), fwd(false);
+    FASTag::FastaFilter both(true), fwd(false);
     both.load(entries({prot})); both.setMinLen(9); both.build(9, 9);
     fwd.load(entries({prot}));  fwd.setMinLen(9);  fwd.build(9, 9);
-    CHECK(both.match(sub) == FasTag::FastaFilter::Hit::Forward, "forward hit expected");
-    CHECK(both.match(rev) == FasTag::FastaFilter::Hit::Reverse, "reverse hit expected");
-    CHECK(fwd.match(rev) == FasTag::FastaFilter::Hit::None, "forward-only must reject a reversal");
+    CHECK(both.match(sub) == FASTag::FastaFilter::Hit::Forward, "forward hit expected");
+    CHECK(both.match(rev) == FASTag::FastaFilter::Hit::Reverse, "reverse hit expected");
+    CHECK(fwd.match(rev) == FASTag::FastaFilter::Hit::None, "forward-only must reject a reversal");
     std::printf("2. orientation: fwd/rev distinguished; forward-only rejects reversals\n");
   }
 
@@ -86,15 +86,15 @@ int main()
   //    mass-correct reading and must be accepted; without collapse it is not.
   {
     const std::string seq = "ARNDCQEGGHKLMFPSTWYV";   // contains GG
-    FasTag::FastaFilter exact(true), iso(true);
+    FASTag::FastaFilter exact(true), iso(true);
     exact.load(entries({seq})); exact.setMinLen(4); exact.build(4, 6);
     iso.load(entries({seq}));   iso.setMinLen(4);   iso.deriveCollapses(0.04); iso.build(4, 6);
     CHECK(iso.collapseRules() > 0, "no collapse rules derived");
     // "QEGGH" read with N in place of GG is "QENH" -- 4 residues, so the
     // length floor does not interfere.
-    CHECK(exact.match("QENH") == FasTag::FastaFilter::Hit::None,
+    CHECK(exact.match("QENH") == FASTag::FastaFilter::Hit::None,
           "exact matching must reject the N reading");
-    CHECK(iso.match("QENH") != FasTag::FastaFilter::Hit::None,
+    CHECK(iso.match("QENH") != FASTag::FastaFilter::Hit::None,
           "collapse must accept N where the sequence spells GG");
     std::printf("3. isobaric collapse: %zu rules; N accepted where the sequence spells GG\n",
                 iso.collapseRules());
@@ -103,7 +103,7 @@ int main()
   // 4. the derived floor scales with database size, and short tags are the
   //    reason it exists: at length 3 the filter is the identity function.
   {
-    FasTag::FastaFilter small(true), big(true);
+    FASTag::FastaFilter small(true), big(true);
     small.load(entries({prot.substr(0, 392)}));
     // Independently random, not prot repeated: repetition adds residues but no
     // new k-mers, so a repeated sequence would still hold only ~66% of 3-mers.
@@ -114,14 +114,14 @@ int main()
     CHECK(small.autoMinLen() < big.autoMinLen(), "floor must grow with database size (%d vs %d)",
           small.autoMinLen(), big.autoMinLen());
     CHECK(small.chanceRate(small.autoMinLen()) < 0.05, "derived floor should keep chance < 5%%");
-    FasTag::FastaFilter noop(true);
+    FASTag::FastaFilter noop(true);
     noop.load(entries({huge})); noop.setMinLen(3); noop.build(3, 3);
     int hits = 0;
     for (int i = 0; i < 500; ++i)
     {
       std::string t;
       for (int j = 0; j < 3; ++j) t.push_back(alpha[pick(rng)]);
-      if (noop.match(t) != FasTag::FastaFilter::Hit::None) ++hits;
+      if (noop.match(t) != FASTag::FastaFilter::Hit::None) ++hits;
     }
     // Against a proteome-sized database every 3-mer is present, so the filter
     // degenerates to the identity function. That is why the floor exists.
@@ -132,16 +132,16 @@ int main()
 
   // 5. degenerate input
   {
-    FasTag::FastaFilter f(true);
+    FASTag::FastaFilter f(true);
     std::string err;
     CHECK(!f.load(entries({}), &err), "empty FASTA must be rejected");
-    FasTag::FastaFilter g(true);
+    FASTag::FastaFilter g(true);
     CHECK(g.load(entries({"acdefghk"})), "lowercase must be accepted");
     g.setMinLen(4); g.build(4, 4);
-    CHECK(g.match("ACDE") != FasTag::FastaFilter::Hit::None, "lowercase should have been folded");
-    FasTag::FastaFilter h(true);
+    CHECK(g.match("ACDE") != FASTag::FastaFilter::Hit::None, "lowercase should have been folded");
+    FASTag::FastaFilter h(true);
     h.load(entries({"AAXAA"})); h.setMinLen(3); h.build(3, 3);
-    CHECK(h.match("AXA") == FasTag::FastaFilter::Hit::None, "ambiguity codes must not match");
+    CHECK(h.match("AXA") == FASTag::FastaFilter::Hit::None, "ambiguity codes must not match");
     std::printf("5. degenerate input: empty rejected, lowercase folded, X not matchable\n");
   }
 
@@ -163,7 +163,7 @@ int main()
     // mis-shift changes the string rather than colliding onto itself.
     e.emplace_back("long", "", "ACDEFGHKLMNPQRSTVWYACDEF");
 
-    FasTag::FastaFilter f(false);
+    FASTag::FastaFilter f(false);
     CHECK(f.load(e), "long sequence did not load");
     f.setMinLen(13);
     f.build(13, 24);
@@ -172,16 +172,16 @@ int main()
     for (int k = 13; k <= 24; ++k)
     {
       const std::string tag = std::string("ACDEFGHKLMNPQRSTVWYACDEF").substr(0, k);
-      CHECK(f.match(tag) == FasTag::FastaFilter::Hit::Forward,
+      CHECK(f.match(tag) == FASTag::FastaFilter::Hit::Forward,
             "length-%d key spanning both halves did not match", k);
     }
 
     // A single residue changed must NOT match -- otherwise the assertions above
     // would pass on a key that had silently collapsed to a constant.
-    CHECK(f.match("ACDEFGHKLMNPQRW") == FasTag::FastaFilter::Hit::None,
+    CHECK(f.match("ACDEFGHKLMNPQRW") == FASTag::FastaFilter::Hit::None,
           "a 15-residue tag absent from the sequence matched anyway");
     // Transposing two residues past the boundary must also be rejected.
-    CHECK(f.match("ACDEFGHKLMNPQSR") == FasTag::FastaFilter::Hit::None,
+    CHECK(f.match("ACDEFGHKLMNPQSR") == FASTag::FastaFilter::Hit::None,
           "a transposition past residue 13 was not distinguished");
     // COLLISION tests. The two checks above cannot catch a corrupt packing,
     // because the same corruption is applied when indexing and when matching --
@@ -192,15 +192,15 @@ int main()
       std::vector<FASTAFile::FASTAEntry> e2;
       // Identical for 12 residues, differing only beyond the hi/lo boundary.
       e2.emplace_back("hi", "", "AAAAAAAAAAAAWWWWWWWW");
-      FasTag::FastaFilter g(false);
+      FASTag::FastaFilter g(false);
       CHECK(g.load(e2), "collision fixture did not load");
       g.setMinLen(20);
       g.build(20, 20);
-      CHECK(g.match("AAAAAAAAAAAAWWWWWWWW") == FasTag::FastaFilter::Hit::Forward,
+      CHECK(g.match("AAAAAAAAAAAAWWWWWWWW") == FASTag::FastaFilter::Hit::Forward,
             "the indexed 20-mer did not match itself");
       // Differs only in residues 13-20. If the carry into the high half is
       // wrong, those bits are lost and this collides with the key above.
-      CHECK(g.match("AAAAAAAAAAAAYYYYYYYY") == FasTag::FastaFilter::Hit::None,
+      CHECK(g.match("AAAAAAAAAAAAYYYYYYYY") == FASTag::FastaFilter::Hit::None,
             "two 20-mers differing only past residue 12 collided -- the carry "
             "into the high half of the key is dropping bits");
     }
@@ -209,13 +209,13 @@ int main()
       // W is code 22 (10110), G is 6 (00110): they differ only in bit 4, so a
       // residue mask narrower than 5 bits makes them the same symbol.
       e3.emplace_back("w", "", "WWWWWWWWWWWWWWWW");
-      FasTag::FastaFilter g(false);
+      FASTag::FastaFilter g(false);
       CHECK(g.load(e3), "5-bit fixture did not load");
       g.setMinLen(16);
       g.build(16, 16);
-      CHECK(g.match("WWWWWWWWWWWWWWWW") == FasTag::FastaFilter::Hit::Forward,
+      CHECK(g.match("WWWWWWWWWWWWWWWW") == FASTag::FastaFilter::Hit::Forward,
             "the indexed W-mer did not match itself");
-      CHECK(g.match("GGGGGGGGGGGGGGGG") == FasTag::FastaFilter::Hit::None,
+      CHECK(g.match("GGGGGGGGGGGGGGGG") == FASTag::FastaFilter::Hit::None,
             "W and G collided -- the residue code is being masked to fewer than "
             "5 bits, so codes 16-24 fold onto codes 0-8");
     }
@@ -236,7 +236,7 @@ int main()
 
       std::vector<FASTAFile::FASTAEntry> e4;
       e4.emplace_back("rand", "", seq);
-      FasTag::FastaFilter g(false);
+      FASTag::FastaFilter g(false);
       CHECK(g.load(e4), "random fixture did not load");
       g.setMinLen(20);
       g.build(20, 20);
@@ -283,9 +283,9 @@ int main()
     {
       const std::string alpha = "ACDEFGHKLMNPQRSTVWY";
       const std::string base  = "ACDEFGHKLMNPQRSTVWYACDEFG";   // 25 = MAX_FILTER_LEN
-      CHECK(static_cast<int>(base.size()) == FasTag::MAX_FILTER_LEN,
+      CHECK(static_cast<int>(base.size()) == FASTag::MAX_FILTER_LEN,
             "base is %zu residues, MAX_FILTER_LEN is %d -- this test is meant to "
-            "run at the maximum", base.size(), FasTag::MAX_FILTER_LEN);
+            "run at the maximum", base.size(), FASTag::MAX_FILTER_LEN);
       std::set<std::string> made;
       std::vector<FASTAFile::FASTAEntry> e5;
       made.insert(base);
@@ -301,16 +301,16 @@ int main()
         }
       }
 
-      FasTag::FastaFilter g(false);
+      FASTag::FastaFilter g(false);
       CHECK(g.load(e5), "substitution fixture did not load");
-      g.setMinLen(FasTag::MAX_FILTER_LEN);
-      g.build(FasTag::MAX_FILTER_LEN, FasTag::MAX_FILTER_LEN);
+      g.setMinLen(FASTag::MAX_FILTER_LEN);
+      g.build(FASTag::MAX_FILTER_LEN, FASTag::MAX_FILTER_LEN);
       CHECK(g.indexedKeys() == made.size(),
             "%zu distinct max-length k-mers -- every single-residue substitution of "
             "a base -- encoded to only %zu keys. The 128-bit packing is losing "
             "information.", made.size(), g.indexedKeys());
       std::printf("boundary: %zu single-substitution %d-mers -> %zu distinct keys\n",
-                  made.size(), FasTag::MAX_FILTER_LEN, g.indexedKeys());
+                  made.size(), FASTag::MAX_FILTER_LEN, g.indexedKeys());
     }
     std::printf("boundary: lengths 13-24 span the hi/lo split; collisions rejected\n");
   }

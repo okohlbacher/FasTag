@@ -4,15 +4,15 @@
 #include <iosfwd>
 #include <string>
 
-namespace FasTag
+namespace FASTag
 {
 namespace TagFeatures
 {
 
-/// Aggregate a FasTag tag TSV into one feature row per spectrum.
+/// Aggregate a FASTag tag TSV into one feature row per spectrum.
 bool aggregate(std::istream& input, std::ostream& output, std::string* error = nullptr);
 
 } // namespace TagFeatures
-} // namespace FasTag
+} // namespace FASTag
 
 #endif

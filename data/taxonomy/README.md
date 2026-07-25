@@ -1,15 +1,15 @@
 # Bundled taxonomy for `-species`
 
-FasTag looks for this directory at `<bin>/../share/FasTag/taxonomy` (a normal
-install) or `<bin>/share-FasTag-taxonomy` (the flat release tarball), or wherever
+FASTag looks for this directory at `<bin>/../share/FASTag/taxonomy` (a normal
+install) or `<bin>/share-FASTag-taxonomy` (the flat release tarball), or wherever
 `FASTAG_TAXONOMY_DIR` points. With the index in place, `-species` needs no paths:
 
 ```
-FasTag -in run.mzML -out run.tags.tsv -species -tag_length 7
+FASTag -in run.mzML -out run.tags.tsv -species -tag_length 7
 ```
 
 `-tag_length` must be **at least the index k** (7 for the shipped index) — a
-shorter tag cannot be looked up, and FasTag refuses the run up front rather than
+shorter tag cannot be looked up, and FASTag refuses the run up front rather than
 producing an empty report.
 
 ## What ships where
@@ -18,7 +18,7 @@ producing an empty report.
 |---|---|---|
 | `nodes.dmp` | ~10 KB | yes |
 | `names.dmp` | ~19 KB | yes |
-| `tax_k7.taxdb` | ~1.06 GB | **no — separate release asset `FasTag-taxonomy-k7.tar.gz`** |
+| `tax_k7.taxdb` | ~1.06 GB | **no — separate release asset `FASTag-taxonomy-k7.tar.gz`** |
 
 The two `.dmp` files are an NCBI taxdump **pruned to the lineages the index can
 reach** (a few hundred taxa instead of ~2.5M). Produced by
@@ -31,11 +31,11 @@ pathogens, gut microbiome, archaea). It is not in the per-platform tarballs
 because it is large and platform-independent. Get it once:
 
 ```
-# download FasTag-taxonomy-k7.tar.gz from the release, then extract it into the
-# FasTag directory (next to the executable). Its top-level dir is
-# share-FasTag-taxonomy, exactly where -species looks:
-tar xzf FasTag-taxonomy-k7.tar.gz -C /path/to/FasTag/
-# verify: shasum -a256 -c FasTag-taxonomy-k7.tar.gz.sha256
+# download FASTag-taxonomy-k7.tar.gz from the release, then extract it into the
+# FASTag directory (next to the executable). Its top-level dir is
+# share-FASTag-taxonomy, exactly where -species looks:
+tar xzf FASTag-taxonomy-k7.tar.gz -C /path/to/FASTag/
+# verify: shasum -a256 -c FASTag-taxonomy-k7.tar.gz.sha256
 ```
 
 Without it, `-species` fails with a message naming the directory it searched and

@@ -21,7 +21,7 @@
 #include <functional>
 #endif
 
-#include "FasTagger.h"
+#include "FASTagger.h"
 #include "FastaFilter.h"
 #include "Proforma.h"
 #include "SpectrumSampler.h"
@@ -63,10 +63,10 @@ namespace
   ///
   /// Resolution order:
   ///   1. $FASTAG_TAXONOMY_DIR   -- a custom or larger reference set
-  ///   2. <executable dir>/../share/FasTag/taxonomy   -- the release layout
+  ///   2. <executable dir>/../share/FASTag/taxonomy   -- the release layout
   ///
   /// Deliberately anchored to the EXECUTABLE, not OPENMS_DATA_PATH: this is
-  /// FasTag's own data, and a user pointing OPENMS_DATA_PATH at a system OpenMS
+  /// FASTag's own data, and a user pointing OPENMS_DATA_PATH at a system OpenMS
   /// installation must not silently lose the taxonomy that shipped beside the
   /// binary they are running.
   /// k of a taxonomy index, read from its 16-byte header alone.
@@ -94,7 +94,7 @@ namespace
     // Reject a header the real loader would reject, so a corrupt/hostile file
     // does not yield a plausible k and a misleading precondition error.
     if ((v1 && ver != 1) || (v2 && ver != 2)) return -1;
-    if (k < 1 || k > static_cast<std::uint32_t>(FasTag::TaxIndex::MAX_K)) return -1;
+    if (k < 1 || k > static_cast<std::uint32_t>(FASTag::TaxIndex::MAX_K)) return -1;
     return static_cast<int>(k);
   }
 
@@ -104,23 +104,23 @@ namespace
     if (env != nullptr && *env != '\0' && File::isDirectory(String(env))) return String(env);
 
     // Two layouts, because the project ships both:
-    //   ../share/FasTag/taxonomy   a normal `cmake --install` tree (bin/ + share/)
-    //   ./share-FasTag-taxonomy    the release tarball, which is flat: the
+    //   ../share/FASTag/taxonomy   a normal `cmake --install` tree (bin/ + share/)
+    //   ./share-FASTag-taxonomy    the release tarball, which is flat: the
     //                              executable sits at the root next to lib/ and
     //                              share-OpenMS/, so there is no ../share to find.
     // Checking only the first would leave -species broken in every release while
     // working perfectly from a local install -- the worst way to get this wrong.
     // A directory only counts if it actually HOLDS the taxonomy. Accepting the
-    // first that merely exists meant an empty ../share/FasTag/taxonomy masked a
-    // complete share-FasTag-taxonomy beside it -- exactly the layout a release
+    // first that merely exists meant an empty ../share/FASTag/taxonomy masked a
+    // complete share-FASTag-taxonomy beside it -- exactly the layout a release
     // has if the index was never installed.
     // Prefer a directory that has the INDEX (a fully usable set), then one with
     // the dumps (installable -- the index is a separate download), then any that
     // merely exists (so the error names a real path). Without the index-first
     // pass, a dumps-only install tree masked a complete flat-release dir.
     const String exe = File::getExecutablePath();
-    const String cands[] = {exe + "../share/FasTag/taxonomy",
-                            exe + "share-FasTag-taxonomy",
+    const String cands[] = {exe + "../share/FASTag/taxonomy",
+                            exe + "share-FASTag-taxonomy",
                             exe + "taxonomy"};
     String with_dumps, any;
     for (const String& c : cands)
@@ -137,7 +137,7 @@ namespace
 
 //-------------------------------------------------------------------------
 /**
-  @page TOPP_FasTag FasTag
+  @page TOPP_FASTag FASTag
 
   @brief Infers partial sequence tags from MS/MS spectra.
 
@@ -149,7 +149,7 @@ namespace
   as FASTA, with the carrying spectra written out as mzML.
 
   <B>The command line parameters of this tool are:</B>
-  @verbinclude TOPP_FasTag.cli
+  @verbinclude TOPP_FASTag.cli
 */
 //-------------------------------------------------------------------------
 
@@ -213,7 +213,7 @@ namespace
       if (peaks_ >= budget_) { flush_(buf_); peaks_ = 0; }
     }
 
-    /// FasTag tags spectra; chromatograms are not input to it.
+    /// FASTag tags spectra; chromatograms are not input to it.
     void consumeChromatogram(ChromatogramType&) override {}
 
     /// Still NOT used for presizing -- that would make correctness depend on a
@@ -248,14 +248,14 @@ namespace
 }
 #endif
 
-class TOPPFasTag : public TOPPBase
+class TOPPFASTag : public TOPPBase
 {
 public:
-  // official = false: FasTag lives outside the OpenMS tree and so is not in
+  // official = false: FASTag lives outside the OpenMS tree and so is not in
   // ToolHandler's list. Passing true makes the TOPPBase constructor throw
   // InvalidValue on startup.
-  TOPPFasTag()
-    : TOPPBase("FasTag", "Infers partial sequence tags from MS/MS spectra.", false,
+  TOPPFASTag()
+    : TOPPBase("FASTag", "Infers partial sequence tags from MS/MS spectra.", false,
                {{"Tabb DL, Ma ZQ, Martin DB, Ham AJ, Chambers MC",
                  "DirecTag: accurate sequence tags from peptide MS/MS through statistical scoring",
                  "J Proteome Res 2008; 7(9): 3838-46", "10.1021/pr800154p"}})
@@ -299,7 +299,7 @@ protected:
     setMinInt_("extension", 0);
     // tag_length + 2*extension is computed as int and indexes the null tables.
     // Unbounded, --extension 1073741824 overflows and aborts with std::length_error.
-    setMaxInt_("extension", (FasTag::MAX_FILTER_LEN - 1) / 2);
+    setMaxInt_("extension", (FASTag::MAX_FILTER_LEN - 1) / 2);
     registerIntOption_("gaps", "<n>", 0,
                        "Allow a tag to cross one missing peak, spelling the two "
                        "residues either side of it from their summed mass; "
@@ -349,7 +349,7 @@ protected:
     registerIntOption_("subsample_seed", "<n>", 1, "Seed for -subsample_* selection", false);
     setMinInt_("subsample_seed", 0);
 
-    // Machine-readable progress for a GUI/pipeline driving FasTag. Off by
+    // Machine-readable progress for a GUI/pipeline driving FASTag. Off by
     // default so the CLI stays quiet; when set, emit periodic lines to stderr:
     //   FASTAG_PROGRESS done=<n> total=<n>
     // total is the spectrum count for indexed input, or 0 when it is not known
@@ -424,10 +424,10 @@ protected:
                         "Add a modified alternative, written inline as X[Name]", false);
   }
 
-  /// Resolve OpenMS/UniMod modification names to FasTag::ModSpec via
+  /// Resolve OpenMS/UniMod modification names to FASTag::ModSpec via
   /// ModificationsDB. Terminal mods are skipped with a note -- they are absorbed
   /// into the reported flanking masses, not the internal residue alphabet.
-  void resolveMods_(const StringList& names, bool variable, std::vector<FasTag::ModSpec>& out)
+  void resolveMods_(const StringList& names, bool variable, std::vector<FASTag::ModSpec>& out)
   {
     auto* db = ModificationsDB::getInstance();
     for (const String& nm : names)
@@ -455,7 +455,7 @@ protected:
                            "ignoring." << std::endl;
         continue;
       }
-      FasTag::ModSpec ms;
+      FASTag::ModSpec ms;
       ms.residue = (origin == 'I') ? 'L' : origin;  // I is folded to L in the alphabet
       ms.delta = mod->getDiffMonoMass();
       ms.name = mod->getId();
@@ -509,7 +509,7 @@ protected:
     const String fasta = getStringOption_("fasta");
     const String out_spectra = getStringOption_("out_spectra");
 
-    FasTag::Param p;
+    FASTag::Param p;
     p.tag_length = getIntOption_("tag_length");
     p.max_extension = getIntOption_("extension");
     p.max_gaps = getIntOption_("gaps");
@@ -535,14 +535,14 @@ protected:
     // Unconditional: the realised length bounds the null tables whether or not a
     // FASTA filter is in use.
     const int max_len = p.tag_length + 2 * p.max_extension;
-    if (max_len > FasTag::MAX_FILTER_LEN)
+    if (max_len > FASTag::MAX_FILTER_LEN)
     {
       OPENMS_LOG_ERROR << "Realised tag length can reach " << max_len << ", beyond the filter's "
-                       << FasTag::MAX_FILTER_LEN << "-residue encoding." << std::endl;
+                       << FASTag::MAX_FILTER_LEN << "-residue encoding." << std::endl;
       return ILLEGAL_PARAMETERS;
     }
 
-    FasTag::FastaFilter filt(getStringOption_("orientation") == "both");
+    FASTag::FastaFilter filt(getStringOption_("orientation") == "both");
     const bool filtering = !fasta.empty();
     if (filtering)
     {
@@ -696,11 +696,11 @@ protected:
                        << std::endl;
       return ILLEGAL_PARAMETERS;
     }
-    FasTag::SampleMask sample_mask;
+    FASTag::SampleMask sample_mask;
     if (subsampling && !mzpeak_in)
     {
-      sample_mask = subsample_n > 0 ? FasTag::sampleByCount(n_total, subsample_n, subsample_seed)
-                                    : FasTag::sampleByFraction(n_total, subsample_frac, subsample_seed);
+      sample_mask = subsample_n > 0 ? FASTag::sampleByCount(n_total, subsample_n, subsample_seed)
+                                    : FASTag::sampleByFraction(n_total, subsample_frac, subsample_seed);
       size_t sel = 0; for (char c : sample_mask) sel += c ? 1 : 0;
       OPENMS_LOG_INFO << "Subsampling: tagging " << sel << " of " << n_total
                       << " input spectra (seed " << subsample_seed << ")" << std::endl;
@@ -754,7 +754,7 @@ protected:
       }
     }
 
-    const FasTag::Tables tables(p);
+    const FASTag::Tables tables(p);
     std::ofstream tsv(out.c_str());
     const bool want_proforma = getFlag_("proforma");
     tsv << "spectrum\ttag\tlength\tcharge\tnterm_mass\tcterm_mass\textended\tgapped\tevalue\tmin_conf\tmean_conf\tfasta_hit"
@@ -825,7 +825,7 @@ protected:
       ++per_thread_ms2[tid];
 
       const auto& prec = spec.getPrecursors().front();
-      const auto tags = FasTag::tagSpectrum(spec, prec.getMZ(), prec.getCharge(), p, tables);
+      const auto tags = FASTag::tagSpectrum(spec, prec.getMZ(), prec.getCharge(), p, tables);
       per_thread_tags[tid] += tags.size();
 
       // Reserve once so the per-field appends below do not repeatedly realloc.
@@ -839,12 +839,12 @@ protected:
         if (filtering)
         {
           ++per_thread_len[tid][static_cast<int>(t.n_res)].first;
-          const auto h = filt.match(FasTag::baseSequence(t.seq));
-          if (h == FasTag::FastaFilter::Hit::None) continue;
+          const auto h = filt.match(FASTag::baseSequence(t.seq));
+          if (h == FASTag::FastaFilter::Hit::None) continue;
           ++per_thread_len[tid][static_cast<int>(t.n_res)].second;
           // A reverse-only match identifies the ion series: the tag was read off
           // the b series, so its flanking masses carry a one-water offset.
-          hit = (h == FasTag::FastaFilter::Hit::Forward) ? "fwd" : "rev";
+          hit = (h == FASTag::FastaFilter::Hit::Forward) ? "fwd" : "rev";
         }
         ++per_thread_rep[tid];
 
@@ -872,7 +872,7 @@ protected:
         f("%.3f", t.min_conf);     buf += '\t';
         f("%.3f", t.mean_conf);    buf += '\t';
         buf += hit;
-        if (want_proforma) { buf += '\t'; buf += FasTag::toProforma(t.seq, t.nterm_mass, t.cterm_mass, proforma_fixed); }
+        if (want_proforma) { buf += '\t'; buf += FASTag::toProforma(t.seq, t.nterm_mass, t.cterm_mass, proforma_fixed); }
         buf += '\n';
       }
       return buf;
@@ -1161,7 +1161,7 @@ protected:
           if (tdir.empty())
           {
             OPENMS_LOG_ERROR << "No taxonomy directory was found next to the executable "
-                             << "(expected <bin>/../share/FasTag/taxonomy). Set "
+                             << "(expected <bin>/../share/FASTag/taxonomy). Set "
                              << "FASTAG_TAXONOMY_DIR, or pass -" << need.first << " explicitly."
                              << std::endl;
           }
@@ -1171,7 +1171,7 @@ protected:
             // separate asset). Missing index is the common case, so name it.
             OPENMS_LOG_ERROR << "The taxonomy dumps are present in '" << tdir
                              << "' but the k-mer index (tax_k7.taxdb) is not. Download "
-                             << "FasTag-taxonomy-k7.tar.gz from the release and extract it "
+                             << "FASTag-taxonomy-k7.tar.gz from the release and extract it "
                              << "there, or set FASTAG_TAXONOMY_DIR / pass -taxdb." << std::endl;
           }
           else
@@ -1182,14 +1182,14 @@ protected:
           return ILLEGAL_PARAMETERS;
         }
       }
-      FasTag::TaxIndex idx;
+      FASTag::TaxIndex idx;
       std::string ierr;
       if (!idx.load(taxdb, &ierr))
       {
         OPENMS_LOG_ERROR << "Failed to load -taxdb '" << taxdb << "': " << ierr << std::endl;
         return INPUT_FILE_CORRUPT;
       }
-      FasTag::Taxonomy tax;
+      FASTag::Taxonomy tax;
       std::string terr;
       if (!tax.load(nodes, names, &terr))
       {
@@ -1247,7 +1247,7 @@ protected:
         std::set<uint32_t> taxa;  // taxa supported anywhere in this spectrum
         for (const std::string& raw : sp.second)
         {
-          const std::string seq = FasTag::baseSequence(raw);
+          const std::string seq = FASTag::baseSequence(raw);
           if (static_cast<int>(seq.size()) < min_len) continue;
           // Intersection of the tag's k-mer taxon sets: the taxon must carry the
           // whole tag, not just one window.
@@ -1259,7 +1259,7 @@ protected:
           std::vector<uint32_t> t;
           for (int i = 0; i + kk <= L; ++i)
           {
-            idx.lookup(FasTag::TaxIndex::fold(seq.substr(static_cast<size_t>(i), static_cast<size_t>(kk))), t);
+            idx.lookup(FASTag::TaxIndex::fold(seq.substr(static_cast<size_t>(i), static_cast<size_t>(kk))), t);
             if (first) { acc = t; first = false; }
             else
             {
@@ -1286,7 +1286,7 @@ protected:
 
       // hits is already rolled up (spectrum-deduped per node), so build the
       // evidence directly -- rolling it again would re-introduce the double count.
-      std::vector<FasTag::NodeEvidence> rolled;
+      std::vector<FASTag::NodeEvidence> rolled;
       rolled.reserve(hits.size());
       for (const auto& kv : hits) rolled.push_back({kv.first, kv.second, kv.second});
 
@@ -1409,6 +1409,6 @@ protected:
 
 int main(int argc, const char** argv)
 {
-  TOPPFasTag tool;
+  TOPPFASTag tool;
   return tool.main(argc, argv);
 }

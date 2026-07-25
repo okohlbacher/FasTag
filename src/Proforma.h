@@ -1,6 +1,6 @@
 // ProForma 2.0 rendering of a sequence tag, for interoperability (F13).
 //
-// A FasTag tag is an internal stretch of residues with a known mass to each
+// A FASTag tag is an internal stretch of residues with a known mass to each
 // peptide terminus but UNKNOWN flanking composition. ProForma has no first-class
 // "mass gap of unknown sequence at a terminus", so the closest standard-conformant
 // notation is a terminal mass tag: `[+<nterm>]-RESIDUES-[+<cterm>]`. Downstream
@@ -15,9 +15,9 @@
 //    are emitted as a ProForma GLOBAL fixed-modification prefix, `<[Name]@C>`,
 //    which is exactly what that syntax is for. The caller supplies the prefix.
 //
-//  * FasTag folds I onto L (Natural19WithoutI), so an emitted `L` means "I or L".
+//  * FASTag folds I onto L (Natural19WithoutI), so an emitted `L` means "I or L".
 //    ProForma has `J` for precisely that ambiguity; every L is rendered as J so
-//    the string does not assert a leucine FasTag cannot distinguish. Variable
+//    the string does not assert a leucine FASTag cannot distinguish. Variable
 //    mods already written inline as `X[Name]` pass through unchanged and their
 //    residue letter is folded the same way.
 //
@@ -32,7 +32,7 @@
 #include <cstdio>
 #include <string>
 
-namespace FasTag
+namespace FASTag
 {
   /// ProForma string for a tag:
   ///   <global-fixed-mods>[+<nterm>]-<residues>-[+<cterm>]

@@ -18,7 +18,7 @@
 #  include <unistd.h>
 #endif
 
-namespace FasTag
+namespace FASTag
 {
   namespace
   {
@@ -381,7 +381,7 @@ namespace FasTag
     }
 
     if (std::memcmp(magic, "FTX2", 4) != 0)
-    { if (err) *err = "not a FasTag taxonomy index"; return false; }
+    { if (err) *err = "not a FASTag taxonomy index"; return false; }
 
     // ---- v2: map it and point into the image -------------------------------
 #ifdef _WIN32
@@ -419,7 +419,7 @@ namespace FasTag
 
     // Re-check the magic in the MAPPED bytes, not just the earlier probe read:
     // the file could have been replaced between the two opens.
-    if (std::memcmp(p, "FTX2", 4) != 0) { reset(); if (err) *err = "not a FasTag taxonomy index"; return false; }
+    if (std::memcmp(p, "FTX2", 4) != 0) { reset(); if (err) *err = "not a FASTag taxonomy index"; return false; }
     if (u32at(4) != 2) { reset(); if (err) *err = "unsupported index version"; return false; }
     k_ = static_cast<int>(u32at(8));
     n_taxa_ = u32at(12);

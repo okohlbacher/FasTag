@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace FasTag
+namespace FASTag
 {
   /// Residues per key at 5 bits each in a 128-bit word.
   ///

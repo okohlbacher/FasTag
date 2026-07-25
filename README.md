@@ -1,10 +1,10 @@
-# FasTag — a fast parallel mass spectrometry tagger and tag-based filter
+# FASTag — a fast parallel mass spectrometry tagger and tag-based filter
 
 Partial sequence tags from peptide MS/MS spectra, and a filter that keeps only
 the spectra whose tags occur in sequences you supply. A reimplementation of the
 [DirecTag](https://doi.org/10.1021/pr800154p) algorithm as an
 [OpenMS](https://www.openms.de) TOPP tool. The citation — Tabb et al.,
-*J. Proteome Res.* 2008, 7:3838 — is for that original DirecTag paper; FasTag
+*J. Proteome Res.* 2008, 7:3838 — is for that original DirecTag paper; FASTag
 has no separate publication of its own.
 
 Scales across threads with memory independent of file size, and returns 5-8%
@@ -13,7 +13,7 @@ more tags than the reference implementation.
 ## What it does
 
 A *sequence tag* is a short peptide read inferred directly from a fragment-ion
-ladder — no database search, no precursor digest. FasTag is a **fast, sensitive
+ladder — no database search, no precursor digest. FASTag is a **fast, sensitive
 prefilter**: it tells you what is worth looking at before you commit to a slow
 method. Typical uses:
 
@@ -50,9 +50,9 @@ by Fisher's method into a single chi-squared-derived E-value:
 
 DirecTag computes the intensity term by enumerating every `C(n, k)` subset of
 peak ranks — combinatorial in tag length, and impractical past length 4 or 5.
-FasTag computes the same quantity as a restricted-partition count via dynamic
+FASTag computes the same quantity as a restricted-partition count via dynamic
 programming, `O(k·n·s_max)` — polynomial instead of combinatorial, verified
-identical to exhaustive enumeration. This is most of why FasTag is faster, and
+identical to exhaustive enumeration. This is most of why FASTag is faster, and
 what makes tag lengths above four practical at all.
 
 **Extension** (`-extension`). A seed is a *minimum* length: each scored seed can
@@ -92,18 +92,18 @@ count is never mistaken for signal:
 ## Install
 
 Prebuilt binaries for every supported platform, from the
-[latest release](https://github.com/okohlbacher/FasTag/releases/latest):
+[latest release](https://github.com/okohlbacher/FASTag/releases/latest):
 
 | platform | download |
 |---|---|
-| Linux x64 | [FasTag-linux-x64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-linux-x64.tar.gz) |
-| Linux arm64 | [FasTag-linux-arm64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-linux-arm64.tar.gz) |
-| macOS x64 | [FasTag-macos-x64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-macos-x64.tar.gz) |
-| macOS arm64 | [FasTag-macos-arm64.tar.gz](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-macos-arm64.tar.gz) |
-| Windows x64 | [FasTag-windows-x64.zip](https://github.com/okohlbacher/FasTag/releases/latest/download/FasTag-windows-x64.zip) |
+| Linux x64 | [FASTag-linux-x64.tar.gz](https://github.com/okohlbacher/FASTag/releases/latest/download/FASTag-linux-x64.tar.gz) |
+| Linux arm64 | [FASTag-linux-arm64.tar.gz](https://github.com/okohlbacher/FASTag/releases/latest/download/FASTag-linux-arm64.tar.gz) |
+| macOS x64 | [FASTag-macos-x64.tar.gz](https://github.com/okohlbacher/FASTag/releases/latest/download/FASTag-macos-x64.tar.gz) |
+| macOS arm64 | [FASTag-macos-arm64.tar.gz](https://github.com/okohlbacher/FASTag/releases/latest/download/FASTag-macos-arm64.tar.gz) |
+| Windows x64 | [FASTag-windows-x64.zip](https://github.com/okohlbacher/FASTag/releases/latest/download/FASTag-windows-x64.zip) |
 
-Each archive extracts to a `FasTag/` folder — run `FasTag/FasTag` (Linux/macOS)
-or `FasTag/FasTag.bat` (Windows); everything else inside is a bundled
+Each archive extracts to a `FASTag/` folder — run `FASTag/FASTag` (Linux/macOS)
+or `FASTag/FASTag.bat` (Windows); everything else inside is a bundled
 dependency the wrapper needs, not something to run directly.
 
 Binaries are not yet code-signed, so macOS Gatekeeper and Windows SmartScreen
@@ -117,35 +117,35 @@ Building from source needs OpenMS ≥ 3.5 and CMake; see
 
 ```bash
 # tags for every spectrum
-FasTag -in run.mzML -out tags.tsv
+FASTag -in run.mzML -out tags.tsv
 
 # high-resolution data, seed 3 extended to at most 15 residues
-FasTag -in run.mzML -out tags.tsv -extension 6 -fragment_tolerance 20
+FASTag -in run.mzML -out tags.tsv -extension 6 -fragment_tolerance 20
 
 # ion-trap MS2 -- set the tolerance to match the analyser
-FasTag -in run.mzML -out tags.tsv -fragment_tolerance 0.3 -fragment_tolerance_unit Da
+FASTag -in run.mzML -out tags.tsv -fragment_tolerance 0.3 -fragment_tolerance_unit Da
 
 # cleaner spectra: collapse isotopes, allow one gap
-FasTag -in run.mzML -out tags.tsv -deisotope -gaps 1
+FASTag -in run.mzML -out tags.tsv -deisotope -gaps 1
 
 # only tags occurring in a protein of interest, plus the spectra carrying them
-FasTag -in run.mzML -out tags.tsv -fasta AGXT.fasta -out_spectra hits.mzML
+FASTag -in run.mzML -out tags.tsv -fasta AGXT.fasta -out_spectra hits.mzML
 
 # mzPeak in, mzPeak out -- any combination of mzML and mzpeak works
-FasTag -in run.mzpeak -out tags.tsv
-FasTag -in run.mzML   -out tags.tsv -out_spectra hits.mzpeak
+FASTag -in run.mzpeak -out tags.tsv
+FASTag -in run.mzML   -out tags.tsv -out_spectra hits.mzpeak
 ```
 
 **Set the fragment tolerance to match the analyser.** A high-resolution
 tolerance on low-resolution data is silent and looks exactly like bad data — on
 an ion-trap file, 20 ppm returned 3,007 tags where 0.3 Da returned 824,959.
-FasTag infers resolution from peak spacing and warns when the two disagree, but
+FASTag infers resolution from peak spacing and warns when the two disagree, but
 it cannot know the analyser, so the setting is yours.
 
 ### mzPeak
 
 [mzPeak](https://github.com/OpenMS/mzpeak) is a Parquet-backed format (Parquet
-tables in a ZIP container). FasTag **reads and writes** it: `-in` accepts
+tables in a ZIP container). FASTag **reads and writes** it: `-in` accepts
 `.mzpeak`, `-out_spectra` writes it, and all four in/out combinations work.
 Tagging is unaffected by which you use — reading a run as mzpeak gives the same
 spectra as reading it as mzML, and a run written to mzpeak and tagged again
@@ -156,7 +156,7 @@ support ([OpenMS-mzPeakRW](https://github.com/okohlbacher/OpenMS-mzPeakRW)) —
 stock and bioconda OpenMS do not have it, and configure reports which you got:
 
 ```
--- FasTag: mzPeak input available (-in accepts .mzpeak)
+-- FASTag: mzPeak input available (-in accepts .mzpeak)
 ```
 
 **Not memory-bounded, upstream** — `MzPeakFile::transform()` currently
@@ -227,7 +227,7 @@ so downstream tools can consume a tag without a bespoke parser. Each tag renders
 as `<[fixed-mods]>[+nterm]-RESIDUES-[+cterm]`: the flanks as terminal mass tags
 (ProForma has no dedicated "mass gap of unknown sequence at a terminus"), fixed
 modifications as a global prefix (`<[Carbamidomethyl]@C>`), and the I/L residue
-as `J` because FasTag folds I onto L and cannot tell them apart. Off by default;
+as `J` because FASTag folds I onto L and cannot tell them apart. Off by default;
 the TSV schema is unchanged unless asked for.
 
 ## Species detection
@@ -237,7 +237,7 @@ classifier, no database search. Off by default (it loads a k-mer index that
 costs seconds and ~1 GB), and a complete request on its own:
 
 ```bash
-FasTag -in run.mzML -out run.tags.tsv -species -tag_length 7
+FASTag -in run.mzML -out run.tags.tsv -species -tag_length 7
 ```
 
 Each tag's k-mers are looked up in a reduced reference index; the taxa carrying
@@ -247,17 +247,17 @@ against its background breadth. Output is a ranked TSV
 taxon at `-species_rank` (genus by default).
 
 `-tag_length` must be **at least the index k** (7) — a shorter tag cannot be
-looked up, and FasTag refuses the run up front rather than writing an empty
+looked up, and FASTag refuses the run up front rather than writing an empty
 report. Pair `-species` with `-subsample_fraction 0.1` for a fast call on a large
 run.
 
 **Get the index.** The pruned taxonomy dumps ship inside every release tarball;
 the ~1 GB k-mer index is a separate asset (platform-independent). Download
-`FasTag-taxonomy-k7.tar.gz` from the release and extract it into the FasTag
+`FASTag-taxonomy-k7.tar.gz` from the release and extract it into the FASTag
 directory:
 
 ```bash
-tar xzf FasTag-taxonomy-k7.tar.gz -C /path/to/FasTag/   # -> share-FasTag-taxonomy/
+tar xzf FASTag-taxonomy-k7.tar.gz -C /path/to/FASTag/   # -> share-FASTag-taxonomy/
 ```
 
 The index is a bit-packed, memory-mapped format (`FTX2`): a 50-taxon index is
@@ -276,7 +276,7 @@ them; in the TSV they are simply present.
 
 ## Demo data
 
-FasTag was validated against public runs from
+FASTag was validated against public runs from
 [ProteomeXchange](https://www.proteomexchange.org)/PRIDE and MassIVE, spanning
 two vendors, three instruments, and both high- and low-resolution MS2:
 
@@ -302,8 +302,8 @@ wall-clock time and peak memory depend heavily on the machine, so they aren't
 quoted here — measure on your own hardware and data.
 
 Against the reference implementation, run sequentially on the same file and
-hardware, FasTag keeps scaling well past where DirecTag flattens out: DirecTag
-rebuilds its ranksum table serially on every run, while FasTag's equivalent is
+hardware, FASTag keeps scaling well past where DirecTag flattens out: DirecTag
+rebuilds its ranksum table serially on every run, while FASTag's equivalent is
 a one-off cost paid once regardless of thread count.
 
 ## Validation
@@ -361,7 +361,7 @@ without filtering anything out:
   for the old speed. See [doc/BACKLOG.md](doc/BACKLOG.md).
 - **No modification support.** Residues are the unmodified 19, so labelled
   samples (TMT and similar) will not match tags spanning a modified residue.
-- **mzPeak is not memory-bounded on read** (see above), an upstream property of `MzPeakFile::transform()` rather than of FasTag.
+- **mzPeak is not memory-bounded on read** (see above), an upstream property of `MzPeakFile::transform()` rather than of FASTag.
 
 ## Licence and provenance
 

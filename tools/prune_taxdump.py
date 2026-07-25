@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Prune an NCBI taxdump to the lineages a FasTag taxdb actually references.
+"""Prune an NCBI taxdump to the lineages a FASTag taxdb actually references.
 
 The full dump is ~500 MB across nodes.dmp and names.dmp and describes ~2.5M
-taxa. A FasTag index covers a curated handful, and the classifier only ever
+taxa. A FASTag index covers a curated handful, and the classifier only ever
 walks from those leaves to the root, so everything off those paths is dead
 weight in a release.
 

@@ -4,11 +4,11 @@
 // kimi CLI from a written spec, then reviewed, numerically verified, and
 // integrated (see the species-detector design notes).
 //
-// TaxStats_test.cpp -- self-contained self-test for the FasTag TaxStats module.
+// TaxStats_test.cpp -- self-contained self-test for the FASTag TaxStats module.
 //
 // Builds a tiny synthetic NCBI taxonomy (nodes.dmp / names.dmp written into a
 // fresh temp directory, including deliberately malformed and duplicate lines),
-// then exercises every part of FasTag::Taxonomy with assert-style checks:
+// then exercises every part of FASTag::Taxonomy with assert-style checks:
 // lineage/parent/rank/name, LCA (sister genera -> family, robustness to
 // unknown taxids), ancestor-at-rank, subtree-sum rollUp, numerical accuracy
 // of binomialUpperTailLogP against a hand-computed case, and end-to-end
@@ -103,7 +103,7 @@ int main() {
             "110\t|\tgenusa-common\t|\t\t|\tcommon name\t|\n"    // ignored
             "777\t|\tGhost\t|\t\t|\tscientific name\t|\n");      // unknown node
 
-  FasTag::Taxonomy tax;
+  FASTag::Taxonomy tax;
   std::string err;
   CHECK(tax.load(nodes_path.string(), names_path.string(), &err),
         "load() succeeds on synthetic dumps: " + err);
@@ -145,8 +145,8 @@ int main() {
   const std::vector<std::pair<uint32_t, uint64_t>> hits = {
       {111, 30}, {112, 20}, {121, 5}, {210, 100}, {999, 7} /* unknown */,
       {111, 2} /* duplicate taxid aggregates */};
-  const std::vector<FasTag::NodeEvidence> rolled = tax.rollUp(hits);
-  std::map<uint32_t, FasTag::NodeEvidence> ev;
+  const std::vector<FASTag::NodeEvidence> rolled = tax.rollUp(hits);
+  std::map<uint32_t, FASTag::NodeEvidence> ev;
   for (const auto& e : rolled) ev[e.taxid] = e;
 
   bool sorted = true;
@@ -184,10 +184,10 @@ int main() {
   const std::vector<std::pair<uint32_t, double>> background_p = {
       {1, 0.02},   {100, 0.006}, {110, 0.001}, {111, 0.0006}, {112, 0.002},
       {120, 0.0006}, {121, 0.0006}, {200, 0.01}, {210, 0.01}};
-  const std::vector<FasTag::TaxonCall> calls =
+  const std::vector<FASTag::TaxonCall> calls =
       tax.call(rolled, background_p, n_total, 0.05);
 
-  std::map<uint32_t, FasTag::TaxonCall> by_taxid;
+  std::map<uint32_t, FASTag::TaxonCall> by_taxid;
   for (const auto& c : calls) by_taxid[c.taxid] = c;
 
   // Genus 110: observed 52, expected 10 -> clearly enriched.
@@ -220,7 +220,7 @@ int main() {
   // significance. Two nodes with q == 0 must be ordered by log_pvalue (more
   // negative = more significant) even when their observed counts disagree.
   {
-    std::vector<FasTag::NodeEvidence> big;
+    std::vector<FASTag::NodeEvidence> big;
     big.push_back({110, 900, 900});   // huge, extremely significant
     big.push_back({120, 950, 950});   // even more observed...
     std::vector<std::pair<uint32_t, double>> tiny_bg = {{110, 1e-6}, {120, 2e-6}};

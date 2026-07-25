@@ -5,11 +5,11 @@ is upstream rather than here.
 
 ## What shipped
 
-`-in run.mzpeak`, when FasTag is built against an OpenMS providing `MzPeakFile`.
+`-in run.mzpeak`, when FASTag is built against an OpenMS providing `MzPeakFile`.
 Detected at configure time, so the same source builds either way:
 
 ```
--- FasTag: mzPeak input available (-in accepts .mzpeak)
+-- FASTag: mzPeak input available (-in accepts .mzpeak)
 ```
 
 Writing too: `-out_spectra hits.mzpeak`. All four in/out combinations work, and
@@ -25,7 +25,7 @@ is called directly.
 ### How
 
 `MzPeakFile` is push-based (`transform()` calls `consumeSpectrum()` once per
-spectrum); FasTag's loop wants a batch to parallelise over. `ChunkingConsumer`
+spectrum); FASTag's loop wants a batch to parallelise over. `ChunkingConsumer`
 buffers into chunks and hands each to the same per-spectrum work the mzML path
 uses — one shared `tag_one`, so the two readers cannot drift.
 
@@ -92,7 +92,7 @@ Tag counts are not identical: 905,760 from mzML against 883,939 from mzpeak,
 97.6%. The mzpeak file is a conversion of the same raw data, and its float32
 m/z storage against mzML's float64 moves a small number of borderline tags
 across the tolerance. Not a correctness difference between the readers -- a
-FasTag-written mzpeak round-trips to exactly the source file's tag set, which
+FASTag-written mzpeak round-trips to exactly the source file's tag set, which
 is the controlled comparison.
 
 ### Two upstream bugs found while wiring this up
@@ -105,7 +105,7 @@ and either one alone makes mzPeak unusable from an *installed* OpenMS.
    and `libarrow` hold distinct typeinfo, the cross-DSO `dynamic_cast` cannot
    match, and the reader silently drops precursors, CV params and the profile
    `mz_delta_model`. Measured: **0 of 42,092** precursors survived a load, while
-   the Parquet held all 42,092. FasTag needs a precursor to tag, so every
+   the Parquet held all 42,092. FASTag needs a precursor to tag, so every
    spectrum was rejected and the run reported a confident zero.
 
    Diagnosed by replicating `readPrecursors_`'s exact logic in a standalone
@@ -115,7 +115,7 @@ and either one alone makes mzPeak unusable from an *installed* OpenMS.
 2. **`MzPeakFile.h` was in no CMake list**, so it never installed. Invisible
    when building against an OpenMS *build tree* (which exposes source includes
    directly), fatal for a consumer of an install: `FileTypes.h` ships with
-   `MZPEAK` but the class is absent, so FasTag's header-based feature detection
+   `MZPEAK` but the class is absent, so FASTag's header-based feature detection
    silently produced a build with no mzPeak support.
 
 Worth remembering as a class: both failures were *green builds that shipped
@@ -166,7 +166,7 @@ runs.**
 2. **`OnDiscMzPeakExperiment`** — random access over Parquet row groups, matching
    `OnDiscMSExperiment`. Would let the mzPeak path use the *same* pull-based loop
    as mzML instead of a separate chunked one, deleting the consumer entirely.
-   The right long-term shape, and an OpenMS contribution rather than a FasTag
+   The right long-term shape, and an OpenMS contribution rather than a FASTag
    change.
 3. **`-out_spectra` for mzPeak**, once writing is worth having. Blocked on
    `MzPeakFile::store()`, whose own documentation says "Run-level metadata and

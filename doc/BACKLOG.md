@@ -84,7 +84,7 @@ Oxidation position deltas, not the fixed-mod rule PXD000001 needed), but only
 let alone at rank 1 — not enough signal for a curve. Two compounding reasons,
 both real properties of this dataset rather than a bug: it is a targeted PTM
 study, so most identified peptides are short and carry a variable
-modification FasTag cannot see (no modification support — a tag spanning a
+modification FASTag cannot see (no modification support — a tag spanning a
 phosphorylated residue simply will not be found); and it is old, low-resolution
 linear-ion-trap CID, which produces markedly sparser fragment ladders than the
 HCD/Orbitrap data used above even before that. Left as a documented dead end
@@ -214,7 +214,7 @@ sensitive **prefilter** (recall-biased; specificity comes from later stages), an
 synthetic evidence cannot flip a shipped default.
 
 **The real competitor is the fragment-ion index** (MSFragger/Sage/Comet-FI), not
-other taggers. FasTag should not claim to beat it on ordinary open search. Its
+other taggers. FASTag should not claim to beat it on ordinary open search. Its
 defensible ground is (i) database-free operation, (ii) multi-PTM / mutation
 reconciliation where a precursor-offset open search struggles, and (iii) being a
 calibrated *tag/feature generator* for the rescoring and assembly ecosystems.
@@ -269,7 +269,7 @@ always on.
 target-decoy scheme (tag decoy spectra, read the false-positive rate off the
 decoy E-value distribution) and **does not calibrate with a single-spectrum
 decoy**. Both a uniform-random-m/z decoy and a gap-shuffle decoy produce an
-essentially empty null — q collapses to ~0 for every tag — because FasTag's real
+essentially empty null — q collapses to ~0 for every tag — because FASTag's real
 false tags are not random-peak coincidences but reads of *chimeric co-isolated
 peptides* and real noise structure (the 66,516 "incorrect" tags on PXD000001
 have median E-value 2.3, i.e. they are real-ladder reads that simply do not
@@ -313,8 +313,8 @@ research project.
 | **F13** ProForma / mzTab / mzIdentML / USI output | days each | Unglamorous and force-multiplying; each format is its own spec-conformance job. |
 | **GUI P2–P6** presets, run IDs + `.partial`, batch queue, million-row DuckDB browser, signing/auto-update | 1–2 weeks | Sequenced in `gui/PLAN.md`. P2 (presets/last-used) and P4 (sequential batch) done; the run orchestration is hardened over four codex review rounds (18→5→2→0): exactly-once run-id-correlated terminal events with early-arrival buffering, ownership that survives a reload, destroyed/abandoned-WebContents guards, spawn-vs-terminal error distinction, single-instance handling, prototype-pollution-safe settings. Still open: P5 DuckDB browser, P6 packaging/signing. |
 | **GUI test harness** | hours | The GUI has no automated tests (typecheck only); orchestration correctness rests on review + in-app runs. `buildArgs()` is a trust boundary (the allowlist that stops arbitrary flags reaching the CLI) and deserves a unit test. Wants a headless runner (vitest) with `electron` mocked — a deliberate dep/CI addition, so land it with P5/P6, not ad hoc. |
-| **GUI OMP Error #15** duplicate `libomp` at spawn | hours, packaging | Runs under Electron intermittently abort with `OMP: Error #15: ... libomp.dylib already initialized`. Diagnosed: `gui/resources/fastag/bin/FasTag` is a dev **symlink** to `build-rel/FasTag` (rpath into a local OpenMS build tree) — not a self-contained bundle. `FasTag` loads `/opt/homebrew/opt/libomp/lib/libomp.dylib` by absolute path while OpenMS pulls in its own libomp, so two images initialize → #15 (a load-order race; the first run of a session can win it). `KMP_DUPLICATE_LIB_OK=TRUE` masks it but can silently corrupt results, so it must NOT ship in a scientific tool. Real fix is P6: copy a self-contained binary, collect its dylib closure once, dedupe `libomp`, and rewrite install names (`dylibbundler`/`install_name_tool` in `afterPack`); then verify a spawned run never hits #15. |
-| **`OnDiscMzPeakExperiment`** | days, upstream | Would delete FasTag's consumer entirely and unify the two read paths. Belongs in OpenMS, not here. |
+| **GUI OMP Error #15** duplicate `libomp` at spawn | hours, packaging | Runs under Electron intermittently abort with `OMP: Error #15: ... libomp.dylib already initialized`. Diagnosed: `gui/resources/fastag/bin/FASTag` is a dev **symlink** to `build-rel/FASTag` (rpath into a local OpenMS build tree) — not a self-contained bundle. `FASTag` loads `/opt/homebrew/opt/libomp/lib/libomp.dylib` by absolute path while OpenMS pulls in its own libomp, so two images initialize → #15 (a load-order race; the first run of a session can win it). `KMP_DUPLICATE_LIB_OK=TRUE` masks it but can silently corrupt results, so it must NOT ship in a scientific tool. Real fix is P6: copy a self-contained binary, collect its dylib closure once, dedupe `libomp`, and rewrite install names (`dylibbundler`/`install_name_tool` in `afterPack`); then verify a spawned run never hits #15. |
+| **`OnDiscMzPeakExperiment`** | days, upstream | Would delete FASTag's consumer entirely and unify the two read paths. Belongs in OpenMS, not here. |
 
 ### Blocked on someone else
 
@@ -330,7 +330,7 @@ research project.
 ### Not closable by implementing it
 
 - **F4 calibrated per-tag q-value.** Attempted and documented above: a
-  single-spectrum decoy produces an empty null because FasTag's real false tags
+  single-spectrum decoy produces an empty null because FASTag's real false tags
   are chimeric co-isolated reads, not random-peak coincidences. This needs a
   chimeric-aware or entrapment null — a research result, not an afternoon. The
   `TagFDR` machinery exists and is unit-tested but stays unwired, deliberately,
@@ -354,7 +354,7 @@ research project.
   archaea), fetched as UniProt reference proteomes (one protein per gene) so the
   background model is not skewed by curation depth. `tools/fetch_reference_set.py`
   resolves species -> strain reference proteomes; the index ships as
-  `FasTag-taxonomy-k7.tar.gz`.
+  `FASTag-taxonomy-k7.tar.gz`.
 
 ### Known limit, not a bug
 - 7-mers cannot separate closely related mammals: on a human sample *Homo* wins
@@ -366,7 +366,7 @@ research project.
   mzIdentML / USI are PSM/identification-centric formats -- they describe
   peptide-spectrum MATCHES, which a bare tag is not (a tag is a partial read
   with mass gaps, no assigned peptide). They fit downstream of a search step,
-  not FasTag's raw output. ProForma is the standard that actually models a tag,
+  not FASTag's raw output. ProForma is the standard that actually models a tag,
   so F13 is done to the extent that is meaningful for a tagger; the rest is
   deliberately out of scope, not merely unfinished.
 - F6 multi-length tags: DONE via -extension (see the F-table).

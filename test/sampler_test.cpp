@@ -9,7 +9,7 @@
 #include <numeric>
 #include <string>
 
-using namespace FasTag;
+using namespace FASTag;
 
 namespace
 {

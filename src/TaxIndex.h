@@ -51,7 +51,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace FasTag
+namespace FASTag
 {
   /// k-mer -> taxon set index over a curated reference protein database.
   ///

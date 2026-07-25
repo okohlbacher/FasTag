@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-using namespace FasTag;
+using namespace FASTag;
 using namespace OpenMS;
 
 namespace

@@ -4,9 +4,9 @@
 // kimi CLI from a written spec, then reviewed, numerically verified, and
 // integrated (see the species-detector design notes).
 //
-// TaxStats.cpp -- FasTag taxonomy + statistics module (implementation).
+// TaxStats.cpp -- FASTag taxonomy + statistics module (implementation).
 //
-// Implements FasTag::Taxonomy declared in TaxStats.h: NCBI taxdump parsing
+// Implements FASTag::Taxonomy declared in TaxStats.h: NCBI taxdump parsing
 // (tolerant of malformed/duplicate lines), tree queries (lineage, LCA,
 // ancestor-at-rank), subtree-sum evidence roll-up, and the per-taxon
 // enrichment test. The binomial upper-tail p-value is computed in log space
@@ -28,7 +28,7 @@
 #include <map>
 #include <unordered_set>
 
-namespace FasTag {
+namespace FASTag {
 
 namespace {
 
@@ -358,4 +358,4 @@ std::vector<TaxonCall> Taxonomy::call(
   return out;
 }
 
-}  // namespace FasTag
+}  // namespace FASTag

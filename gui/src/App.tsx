@@ -305,7 +305,7 @@ export default function App(): JSX.Element {
     <div className="app">
       <header>
         <img className="logo" src={logo} alt="" width={26} height={26} />
-        <h1>FasTag</h1>
+        <h1>FASTag</h1>
         {bin && (
           <span className={`badge ${bin.ok ? 'ok' : 'bad'}`} title={bin.bin}>
             {bin.ok ? bin.detail : `binary not runnable: ${bin.detail}`}

@@ -120,7 +120,7 @@ is that a regression in ranking now fails in seconds instead of never.
 ### Reproducing a measurement
 
 ```bash
-FasTag -in <file> -out tags.tsv -tag_length 6 -threads N \
+FASTag -in <file> -out tags.tsv -tag_length 6 -threads N \
        -fragment_tolerance <see table> -fragment_tolerance_unit <ppm|Da>
 ```
 

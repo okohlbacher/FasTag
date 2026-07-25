@@ -4,9 +4,9 @@
 // kimi CLI from a written spec, then reviewed, numerically verified, and
 // integrated (see the species-detector design notes).
 //
-// TaxStats.h -- FasTag taxonomy + statistics module (interface).
+// TaxStats.h -- FASTag taxonomy + statistics module (interface).
 //
-// This header declares FasTag::Taxonomy, a self-contained C++17 module that
+// This header declares FASTag::Taxonomy, a self-contained C++17 module that
 // (1) loads the NCBI taxonomy tree from nodes.dmp / names.dmp dumps and
 // answers tree queries (parent, rank, name, lineage, LCA, ancestor-at-rank),
 // (2) rolls per-taxon observed hit counts up the tree into subtree sums, and
@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-namespace FasTag {
+namespace FASTag {
 
 // Evidence accumulated at one taxonomy node: hits observed directly at the
 // node, and the sum over the node's whole subtree (itself + all descendants).
@@ -124,4 +124,4 @@ private:
   static constexpr double kPoissonMaxLambda = 1000.0;
 };
 
-}  // namespace FasTag
+}  // namespace FASTag

@@ -15,7 +15,7 @@ name: build
 # only thing that triggers a rebuild is deliberately bumping one of them.
 #
 # The job VERIFIES that OpenMSConfig.cmake and MzPeakFile.h actually exist
-# before FasTag configures. Both have been silently absent at some point --
+# before FASTag configures. Both have been silently absent at some point --
 # the header because it was in no CMake list at all -- and each time the
 # result was a green build that shipped without the feature.
 
@@ -45,7 +45,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# The patched OpenMS that gives FasTag mzPeak read/write.
+# The patched OpenMS that gives FASTag mzPeak read/write.
 #
 # bioconda's openms has MzPeakFile.h but no MZPEAK in its FileTypes enum, so
 # every binary built against it silently omits the format. Getting mzPeak into
@@ -77,12 +77,12 @@ jobs:
   # ------------------------------------------------------- patched OpenMS
   # Its own job, for the reason windows.yml already documents: actions/cache
   # saves in a post-hook gated on the JOB having succeeded. Building OpenMS in
-  # the same job as FasTag means every FasTag-side failure also throws away a
+  # the same job as FASTag means every FASTag-side failure also throws away a
   # ~70-minute OpenMS build, and the next push pays for it again.
   #
   # Splitting it means this job's success -- and therefore its cache save --
   # depends only on OpenMS building, which is the expensive part and the part
-  # that does not change between FasTag commits.
+  # that does not change between FASTag commits.
   openms:
     name: openms-${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -139,7 +139,7 @@ jobs:
           # src/openms ONLY -- the library, not the TOPP tools or tests that
           # the overlay also carries.
           #
-          # FasTag links libOpenMS and nothing else, and one of those tools
+          # FASTag links libOpenMS and nothing else, and one of those tools
           # does not compile on MSVC:
           #
           #   src/topp/DIAPseudoSpectra.cpp(1447):
@@ -233,7 +233,7 @@ jobs:
         shell: bash -el {0}
         run: |
           set -euo pipefail
-          # The library, not the ~200 TOPP executables. FasTag links libOpenMS
+          # The library, not the ~200 TOPP executables. FASTag links libOpenMS
           # and nothing else, and building the tools roughly triples this job.
           cmake --build openms-build --target OpenMS
 
@@ -277,7 +277,7 @@ jobs:
           grep -q "void store(" openms-install/include/OpenMS/FORMAT/MzPeakFile.h
           du -sh openms-install
 
-  # ------------------------------------------------------------ FasTag
+  # ------------------------------------------------------------ FASTag
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -367,7 +367,7 @@ jobs:
           key: openms-mzpeak-${{ matrix.name }}-${{ env.OPENMS_BASE_SHA }}-${{ env.MZPEAK_REF }}-v1
           fail-on-cache-miss: true
 
-      # The RUNTIME half of what the openms job built against, plus FasTag's own
+      # The RUNTIME half of what the openms job built against, plus FASTag's own
       # toolchain. libOpenMS links Arrow, Qt, Xerces and the rest dynamically,
       # so they have to be present here too -- not just where it was compiled.
       #
@@ -485,17 +485,17 @@ jobs:
           # would fail first. Verified by configuring with
           # -DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=TRUE, which errors with "OpenMS
           # could not be found because dependency OpenMP could not be found"
-          # rather than silently building serial. FasTag supports OpenMS >= 3.5
+          # rather than silently building serial. FASTag supports OpenMS >= 3.5
           # generally though, and an OpenMS built without that dependency would
-          # reach FasTag's own non-REQUIRED find_package(OpenMP) -- which warns and
+          # reach FASTag's own non-REQUIRED find_package(OpenMP) -- which warns and
           # carries on. Cheap guard, narrower exposure than first assumed.
-          if ! grep -q "FasTag: OpenMP" configure.log; then
+          if ! grep -q "FASTag: OpenMP" configure.log; then
             echo "::error::OpenMP was not found. The binary would be serial and"
             echo "::error::the performance claims would not hold. Configure said:"
             grep -i "openmp" configure.log || echo "(no OpenMP line at all)"
             exit 1
           fi
-          grep "FasTag: OpenMP" configure.log
+          grep "FASTag: OpenMP" configure.log
 
       - name: Verify mzPeak support was enabled
         shell: bash -el {0}
@@ -503,19 +503,19 @@ jobs:
           # The whole reason OpenMS is built from source here is mzPeak; a release
           # that silently drops it defeats the purpose. The openms job already
           # asserts the *install* has the MZPEAK enum and store(); this asserts the
-          # thing that actually ships -- FasTag was CONFIGURED with mzPeak on.
+          # thing that actually ships -- FASTag was CONFIGURED with mzPeak on.
           #
           # Same shape as the OpenMP gate: check the property that matters
           # (configure decided mzPeak is available), not a proxy. A regression --
           # a broken install, a detection change -- fails the release build here
           # instead of shipping an mzML-only binary that reports .mzpeak as
           # "type: unknown" to a user.
-          if ! grep -q "FasTag: mzPeak input available" configure.log; then
+          if ! grep -q "FASTag: mzPeak input available" configure.log; then
             echo "::error::mzPeak support was NOT enabled. The release must read .mzpeak."
             grep -i "mzpeak" configure.log || echo "(no mzPeak line at all)"
             exit 1
           fi
-          grep "FasTag: mzPeak input available" configure.log
+          grep "FASTag: mzPeak input available" configure.log
 
       - name: Build
         shell: bash -el {0}
@@ -527,9 +527,9 @@ jobs:
           # Belt-and-braces beyond the configure-time gate: the binary itself must
           # list mzpeak among -in's valid formats. Catches anything between
           # configure and link that could drop the format.
-          if ! ./build/FasTag --help 2>&1 | grep -E "valid formats.*mzpeak"; then
-            echo "::error::built FasTag does not advertise mzpeak input."
-            ./build/FasTag --help 2>&1 | grep -i "valid formats" || true
+          if ! ./build/FASTag --help 2>&1 | grep -E "valid formats.*mzpeak"; then
+            echo "::error::built FASTag does not advertise mzpeak input."
+            ./build/FASTag --help 2>&1 | grep -i "valid formats" || true
             exit 1
           fi
 
@@ -539,12 +539,12 @@ jobs:
 
       - name: Smoke-test the binary
         shell: bash -el {0}
-        run: ./build/FasTag --help
+        run: ./build/FASTag --help
 
       - uses: actions/upload-artifact@v4
         with:
-          name: FasTag-${{ matrix.name }}
-          path: build/FasTag
+          name: FASTag-${{ matrix.name }}
+          path: build/FASTag
           if-no-files-found: error
 
       # ---------------------------------------------------------------------
@@ -555,7 +555,7 @@ jobs:
       #   dyld: Library not loaded: @rpath/libOpenMS.dylib
       #     tried: '/Users/runner/micromamba/envs/fastag/lib/libOpenMS.dylib'
       #
-      # `build/FasTag` as produced above carries an RPATH pointing at THIS
+      # `build/FASTag` as produced above carries an RPATH pointing at THIS
       # JOB's own conda environment, which obviously does not exist on a
       # machine that only downloaded the release tarball -- true on Linux
       # (RPATH /home/runner/micromamba/envs/fastag/lib) exactly as much as
@@ -577,7 +577,7 @@ jobs:
       #     difference (real local testing showed macOS did not hit this,
       #     but the underlying reason is not understood well enough to trust
       #     it holding on a future OpenMS rebuild). A wrapper script
-      #     (FasTag -> FasTag.bin) sets OPENMS_DATA_PATH relative to itself
+      #     (FASTag -> FASTag.bin) sets OPENMS_DATA_PATH relative to itself
       #     before exec'ing the real binary, rather than assuming an install
       #     location that does not exist on a bare download.
       - name: Bundle runtime dependencies for portability (Linux)
@@ -585,8 +585,8 @@ jobs:
         shell: bash -el {0}
         run: |
           set -e
-          rm -rf dist && mkdir -p dist/FasTag/lib
-          cp build/FasTag dist/FasTag/FasTag.bin
+          rm -rf dist && mkdir -p dist/FASTag/lib
+          cp build/FASTag dist/FASTag/FASTag.bin
 
           # TWO source prefixes now, not one. libOpenMS and libOpenSwathAlgo
           # come from the patched OpenMS install; everything they in turn need
@@ -599,7 +599,7 @@ jobs:
           # Match on ldd's RESOLVED path rather than the soname, so a library
           # is attributed to whichever prefix it actually came from instead of
           # being looked up in a prefix that may not hold it.
-          ldd dist/FasTag/FasTag.bin \
+          ldd dist/FASTag/FASTag.bin \
             | sed -n 's/.*=> \(\/[^ ]*\).*/\1/p' \
             | grep -E "^($LIBDIR|$OMSLIB)/" | sort -u > /tmp/needed.txt
 
@@ -609,39 +609,39 @@ jobs:
             if [ -L "$path" ]; then
               real=$(readlink -f "$path")
               realname=$(basename "$real")
-              [ -f "dist/FasTag/lib/$realname" ] || cp -L "$real" "dist/FasTag/lib/$realname"
-              [ -e "dist/FasTag/lib/$name" ] || ln -s "$realname" "dist/FasTag/lib/$name"
+              [ -f "dist/FASTag/lib/$realname" ] || cp -L "$real" "dist/FASTag/lib/$realname"
+              [ -e "dist/FASTag/lib/$name" ] || ln -s "$realname" "dist/FASTag/lib/$name"
             else
-              [ -f "dist/FasTag/lib/$name" ] || cp -L "$path" "dist/FasTag/lib/$name"
+              [ -f "dist/FASTag/lib/$name" ] || cp -L "$path" "dist/FASTag/lib/$name"
             fi
           done < /tmp/needed.txt
 
           # dlopen-only BLAS/LAPACK backend aliases -- see the comment above.
           for alias in libblas.so.3 libcblas.so.3 liblapack.so.3 liblapacke.so.3; do
-            if [ -L "$LIBDIR/$alias" ] && [ ! -e "dist/FasTag/lib/$alias" ]; then
+            if [ -L "$LIBDIR/$alias" ] && [ ! -e "dist/FASTag/lib/$alias" ]; then
               real=$(readlink -f "$LIBDIR/$alias")
               realname=$(basename "$real")
-              [ -f "dist/FasTag/lib/$realname" ] || cp -L "$real" "dist/FasTag/lib/$realname"
-              ln -s "$realname" "dist/FasTag/lib/$alias"
+              [ -f "dist/FASTag/lib/$realname" ] || cp -L "$real" "dist/FASTag/lib/$realname"
+              ln -s "$realname" "dist/FASTag/lib/$alias"
             fi
           done
 
-          patchelf --set-rpath '$ORIGIN/lib' dist/FasTag/FasTag.bin
-          for so in dist/FasTag/lib/*.so*; do
+          patchelf --set-rpath '$ORIGIN/lib' dist/FASTag/FASTag.bin
+          for so in dist/FASTag/lib/*.so*; do
             [ -L "$so" ] && continue
             patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
           done
 
-          cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FasTag/share-OpenMS
+          cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FASTag/share-OpenMS
 
           # The taxonomy -species resolves by default. Only the pruned NCBI dumps
           # (12 KB) go here; the 232 MB k-mer index is platform-independent and
-          # ships once per release as FasTag-taxonomy.tar.gz, rather than five
-          # times inside these tarballs. `share-FasTag-taxonomy` (not
-          # share/FasTag/taxonomy) because this layout is FLAT -- the executable
-          # sits at the root, so there is no ../share to resolve; FasTag looks for
-          # both spellings, see taxonomyDir_() in src/FasTag.cpp.
-          cp -r data/taxonomy dist/FasTag/share-FasTag-taxonomy
+          # ships once per release as FASTag-taxonomy.tar.gz, rather than five
+          # times inside these tarballs. `share-FASTag-taxonomy` (not
+          # share/FASTag/taxonomy) because this layout is FLAT -- the executable
+          # sits at the root, so there is no ../share to resolve; FASTag looks for
+          # both spellings, see taxonomyDir_() in src/FASTag.cpp.
+          cp -r data/taxonomy dist/FASTag/share-FASTag-taxonomy
           # printf, not a heredoc: a heredoc's body has to be indented to
           # satisfy YAML's block-scalar rules, but leading whitespace before
           # `#!` breaks shebang recognition -- the kernel requires it at byte
@@ -652,10 +652,10 @@ jobs:
             '#!/bin/sh' \
             'HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
             'export OPENMS_DATA_PATH="$HERE/share-OpenMS"' \
-            'exec "$HERE/FasTag.bin" "$@"' \
-            > dist/FasTag/FasTag
-          chmod +x dist/FasTag/FasTag dist/FasTag/FasTag.bin
-          du -sh dist/FasTag
+            'exec "$HERE/FASTag.bin" "$@"' \
+            > dist/FASTag/FASTag
+          chmod +x dist/FASTag/FASTag dist/FASTag/FASTag.bin
+          du -sh dist/FASTag
 
       - name: Install dylibbundler (macOS)
         if: runner.os == 'macOS'
@@ -666,12 +666,12 @@ jobs:
         shell: bash -el {0}
         run: |
           set -e
-          rm -rf dist && mkdir -p dist/FasTag
-          cp build/FasTag dist/FasTag/FasTag.bin
+          rm -rf dist && mkdir -p dist/FASTag
+          cp build/FASTag dist/FASTag/FASTag.bin
 
           dylibbundler -od -b \
-            -x dist/FasTag/FasTag.bin \
-            -d dist/FasTag/lib \
+            -x dist/FASTag/FASTag.bin \
+            -d dist/FASTag/lib \
             -p '@executable_path/lib/' \
             -s "$OPENMS_INSTALL/lib" \
             -s "$CONDA_PREFIX/lib"
@@ -680,7 +680,7 @@ jobs:
           # refuses to launch:
           #
           #   Library not loaded: @executable_path/lib/libOpenMS.dylib
-          #   tried: '.../dist/FasTag/lib/libOpenMS.dylib'
+          #   tried: '.../dist/FASTag/lib/libOpenMS.dylib'
           #         (duplicate LC_RPATH '@executable_path/lib/')
           #
           # dylibbundler rewrites each existing rpath to its -p prefix
@@ -709,25 +709,25 @@ jobs:
             # this anyway when it is configured.
             codesign --force --sign - "$f" 2>/dev/null || true
           }
-          dedup_rpath dist/FasTag/FasTag.bin
-          for so in dist/FasTag/lib/*.dylib; do
+          dedup_rpath dist/FASTag/FASTag.bin
+          for so in dist/FASTag/lib/*.dylib; do
             [ -e "$so" ] || continue
             [ -L "$so" ] && continue
             dedup_rpath "$so"
           done
-          echo "LC_RPATH on FasTag.bin after dedup:"
-          otool -l dist/FasTag/FasTag.bin \
+          echo "LC_RPATH on FASTag.bin after dedup:"
+          otool -l dist/FASTag/FASTag.bin \
             | awk '/LC_RPATH/{g=1;next} g&&/^ *path /{print "  " $2; g=0}'
           echo "LC_RPATH on libOpenMS.dylib after dedup:"
-          otool -l dist/FasTag/lib/libOpenMS.dylib \
+          otool -l dist/FASTag/lib/libOpenMS.dylib \
             | awk '/LC_RPATH/{g=1;next} g&&/^ *path /{print "  " $2; g=0}'
 
-          cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FasTag/share-OpenMS
+          cp -r "$OPENMS_INSTALL/share/OpenMS" dist/FASTag/share-OpenMS
 
           # Same taxonomy copy as the Linux step above. It lives in BOTH because
           # Linux and macOS have separate bundle steps; adding it to only one
           # shipped two of the four tarballs without it.
-          cp -r data/taxonomy dist/FasTag/share-FasTag-taxonomy
+          cp -r data/taxonomy dist/FASTag/share-FASTag-taxonomy
           # printf, not a heredoc: a heredoc's body has to be indented to
           # satisfy YAML's block-scalar rules, but leading whitespace before
           # `#!` breaks shebang recognition -- the kernel requires it at byte
@@ -738,10 +738,10 @@ jobs:
             '#!/bin/sh' \
             'HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
             'export OPENMS_DATA_PATH="$HERE/share-OpenMS"' \
-            'exec "$HERE/FasTag.bin" "$@"' \
-            > dist/FasTag/FasTag
-          chmod +x dist/FasTag/FasTag dist/FasTag/FasTag.bin
-          du -sh dist/FasTag
+            'exec "$HERE/FASTag.bin" "$@"' \
+            > dist/FASTag/FASTag
+          chmod +x dist/FASTag/FASTag dist/FASTag/FASTag.bin
+          du -sh dist/FASTag
 
       # The actual regression guard: run the bundle exactly the way a user
       # who only downloaded the tarball would, and fail the build if it
@@ -756,7 +756,7 @@ jobs:
         run: |
           set -e
           unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH CONDA_PREFIX
-          OUT=$(cd /tmp && "$GITHUB_WORKSPACE/dist/FasTag/FasTag" -in nonexistent.mzML -out /tmp/portability-check.tsv 2>&1) || true
+          OUT=$(cd /tmp && "$GITHUB_WORKSPACE/dist/FASTag/FASTag" -in nonexistent.mzML -out /tmp/portability-check.tsv 2>&1) || true
           echo "$OUT"
           if echo "$OUT" | grep -qiE "library not loaded|cannot open shared object|shared data|dyld|error while loading"; then
             echo "::error::Bundle is NOT portable -- still resolves something from the build environment. See output above."
@@ -776,7 +776,7 @@ jobs:
           # never listed it; a build WITH it accepts the name and fails on the
           # missing file instead. So reaching "File not found" here is the
           # assertion.
-          OUT2=$(cd /tmp && "$GITHUB_WORKSPACE/dist/FasTag/FasTag" -in nonexistent.mzpeak -out /tmp/mzpeak-check.tsv 2>&1) || true
+          OUT2=$(cd /tmp && "$GITHUB_WORKSPACE/dist/FASTag/FASTag" -in nonexistent.mzpeak -out /tmp/mzpeak-check.tsv 2>&1) || true
           echo "$OUT2"
           echo "$OUT2" | grep -q "File not found" || {
             echo "::error::Shipped bundle does not accept .mzpeak -- mzPeak support is missing from the release artifact."
@@ -785,8 +785,8 @@ jobs:
 
           # The Arrow/Parquet stack has to have travelled with it, since that
           # is what actually reads the format once a real file is given.
-          ls dist/FasTag/lib | grep -qi 'arrow' || { echo "::error::no Arrow library in the bundle"; exit 1; }
-          ls dist/FasTag/lib | grep -qi 'parquet' || { echo "::error::no Parquet library in the bundle"; exit 1; }
+          ls dist/FASTag/lib | grep -qi 'arrow' || { echo "::error::no Arrow library in the bundle"; exit 1; }
+          ls dist/FASTag/lib | grep -qi 'parquet' || { echo "::error::no Parquet library in the bundle"; exit 1; }
 
           echo "Portability check passed: runs standalone, no build-environment leakage, mzPeak present."
 
@@ -795,7 +795,7 @@ jobs:
       #
       # Adapted from a working reference (BALL/BALLView's release.yml), not
       # invented -- but that project ships a Qt .app bundle via macdeployqt
-      # and a signed .dmg via create-dmg; FasTag ships a bundled folder, not
+      # and a signed .dmg via create-dmg; FASTag ships a bundled folder, not
       # an .app, so none of that packaging machinery applies, and one thing
       # does NOT carry over: `stapler staple` only works on .app bundles,
       # .pkg installers and disk images, never a lone Mach-O binary or a
@@ -855,18 +855,18 @@ jobs:
       # dependencies' own signatures too, so they need a real signature in
       # place beforehand -- dylibbundler's own internal codesign call uses an
       # ad-hoc identity ("-"), which notarization does not accept.
-      - name: Codesign FasTag with Developer ID + hardened runtime (macOS)
+      - name: Codesign FASTag with Developer ID + hardened runtime (macOS)
         if: steps.mac-signing.outputs.enabled == 'true'
         shell: bash
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
-          for dylib in dist/FasTag/lib/*.dylib; do
+          for dylib in dist/FASTag/lib/*.dylib; do
             [ -L "$dylib" ] && continue
             codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" --timestamp "$dylib"
           done
-          codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" --timestamp dist/FasTag/FasTag.bin
-          codesign --verify --strict --verbose=2 dist/FasTag/FasTag.bin
+          codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" --timestamp dist/FASTag/FASTag.bin
+          codesign --verify --strict --verbose=2 dist/FASTag/FASTag.bin
 
       - name: Submit to Apple notary + wait (macOS)
         if: steps.mac-signing.outputs.enabled == 'true'
@@ -877,8 +877,8 @@ jobs:
           MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
           MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         run: |
-          ditto -c -k --keepParent dist/FasTag "${RUNNER_TEMP}/FasTag-notarize.zip"
-          xcrun notarytool submit "${RUNNER_TEMP}/FasTag-notarize.zip" \
+          ditto -c -k --keepParent dist/FASTag "${RUNNER_TEMP}/FASTag-notarize.zip"
+          xcrun notarytool submit "${RUNNER_TEMP}/FASTag-notarize.zip" \
             --apple-id "$MACOS_APPLE_ID" --team-id "$MACOS_TEAM_ID" \
             --password "$MACOS_NOTARY_PASSWORD" --wait
 
@@ -893,7 +893,7 @@ jobs:
         run: security delete-keychain "${RUNNER_TEMP}/fastag-signing.keychain-db" || true
 
       # Filenames deliberately carry no version: the README links
-      # /releases/latest/download/FasTag-<platform>.tar.gz, a GitHub URL form
+      # /releases/latest/download/FASTag-<platform>.tar.gz, a GitHub URL form
       # that always resolves to whatever the newest release's file of that
       # name is. Each new tag's build overwrites the same name inside its OWN
       # release, so nothing else needs to change when this table gets a new
@@ -906,8 +906,8 @@ jobs:
       # fails harmlessly because it already exists, then --clobber lets each
       # attach its own binary regardless of arrival order.
       #
-      # Archives the WHOLE dist/FasTag/ folder now, not a single file: users
-      # run FasTag/FasTag (the wrapper), not the FasTag.bin it execs.
+      # Archives the WHOLE dist/FASTag/ folder now, not a single file: users
+      # run FASTag/FASTag (the wrapper), not the FASTag.bin it execs.
       - name: Attach binary to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash -el {0}
@@ -918,5 +918,5 @@ jobs:
             --title "${{ github.ref_name }}" \
             --notes "Automated binary upload; release notes pending." \
             2>/dev/null || true
-          tar -C dist -czf "FasTag-${{ matrix.name }}.tar.gz" FasTag
-          gh release upload "${{ github.ref_name }}" "FasTag-${{ matrix.name }}.tar.gz" --clobber
+          tar -C dist -czf "FASTag-${{ matrix.name }}.tar.gz" FASTag
+          gh release upload "${{ github.ref_name }}" "FASTag-${{ matrix.name }}.tar.gz" --clobber

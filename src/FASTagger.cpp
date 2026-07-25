@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Oliver Kohlbacher and contributors
 // SPDX-License-Identifier: MIT
 
-#include "FasTagger.h"
+#include "FASTagger.h"
 
 #include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
@@ -22,7 +22,7 @@
 
 using namespace OpenMS;
 
-namespace FasTag
+namespace FASTag
 {
   /// Peak ceiling used when max_peak_count is 0. Tables and prepare() must agree:
   /// intensityP() returns 1.0 above the table extent, silently disabling the
@@ -377,7 +377,7 @@ namespace FasTag
       {
         // Clamp to what the deisotoper accepts.
         //
-        // OpenMS throws IllegalArgument above 100 ppm or 0.1 Da, and FasTag
+        // OpenMS throws IllegalArgument above 100 ppm or 0.1 Da, and FASTag
         // passed the fragment tolerance straight through -- so `-deisotope` with
         // an ion-trap tolerance CRASHED the tool with an uncaught exception. Not
         // hypothetical: 0.3 Da is the correct setting for the Eclipse benchmark

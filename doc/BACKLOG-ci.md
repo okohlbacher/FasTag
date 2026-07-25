@@ -20,12 +20,12 @@ are **already fixed** in the workflow, so macOS and Windows inherit them:
 |---|---|---|---|
 | 1 | Eigen 3.4 rejects the CMake version *range* `3.4.0...<6` that `OpenMSConfig.cmake` requests | pass `cmake/eigen3-range-shim` | all |
 | 2 | `OpenMS/config.h` includes `boost/current_function.hpp`, but bioconda's `openms` does not depend on Boost | add `libboost-headers` | all |
-| 3 | `FileTypes::MZPEAK` referenced outside its `#ifdef` — **a FasTag bug** | gate it; detect the enum, not just the header | all |
+| 3 | `FileTypes::MZPEAK` referenced outside its `#ifdef` — **a FASTag bug** | gate it; detect the enum, not just the header | all |
 | 4 | `find_dependency(Qt6)` against an incomplete Qt6 | add `qt6-main` | all |
 | 5 | conda's ARM Qt6 is marked cross-compiled and demands a host Qt | `-DQT_HOST_PATH=$CONDA_PREFIX` | ARM |
 | 6 | contrib shells out to `cl.exe` and needs the MSVC developer env | `ilammy/msvc-dev-cmd` | Windows |
 
-Not one was visible on any machine that had built FasTag before — laptop and HPC
+Not one was visible on any machine that had built FASTag before — laptop and HPC
 both had Eigen worked around by hand and Boost/Qt supplied by contrib. These are
 what a new user hits on a clean machine.
 
@@ -81,12 +81,12 @@ Resolved. `windows-x64-openms` and `windows-x64` both passed in run
 that gate is not overridden by `continue-on-error` at the job level (which
 only changes how the workflow reports the job's outcome, not the runtime
 `success()` a post-hook's own condition evaluates). The first attempt cached
-contrib and the OpenMS install in the same job as FasTag's own
-configure/build/test; every time FasTag's side failed, *both* caches silently
+contrib and the OpenMS install in the same job as FASTag's own
+configure/build/test; every time FASTag's side failed, *both* caches silently
 failed to save, so the next push repaid the full ~100-minute build to test a
 one-line CMake flag. Split into `windows-x64-openms` (contrib + OpenMS
-install, nothing FasTag-specific, so its own success — and therefore its cache
-saves — no longer depends on FasTag configuring cleanly) and `windows-x64`
+install, nothing FASTag-specific, so its own success — and therefore its cache
+saves — no longer depends on FASTag configuring cleanly) and `windows-x64`
 (needs the first job, restores both caches, redoes only the cheap per-runner
 installs: choco, Qt, conda). This is the same two-job pattern OpenMS's own CI
 uses for contrib, now understood to be load-bearing rather than incidental.
@@ -95,12 +95,12 @@ uses for contrib, now understood to be load-bearing rather than incidental.
 a cold cache. Warm-cache reruns (only the `windows-x64` job, choco/Qt/conda
 reinstalled fresh each time) take a few minutes.
 
-**What FasTag's own configure needed, once OpenMS itself built** — all found
+**What FASTag's own configure needed, once OpenMS itself built** — all found
 by direct diagnosis on a warm cache, not guessed:
 
 | # | issue | fix |
 |---|---|---|
-| 1 | `OpenMSConfig.cmake` re-runs `find_dependency(XercesC)` etc. at every downstream consumer's configure time, using ordinary `find_package` — not via `OPENMS_CONTRIB_LIBS`, which is a hint OpenMS's own CMakeLists reads only at its own configure time | add `contrib-build` to `CMAKE_PREFIX_PATH` for FasTag's configure too |
+| 1 | `OpenMSConfig.cmake` re-runs `find_dependency(XercesC)` etc. at every downstream consumer's configure time, using ordinary `find_package` — not via `OPENMS_CONTRIB_LIBS`, which is a hint OpenMS's own CMakeLists reads only at its own configure time | add `contrib-build` to `CMAKE_PREFIX_PATH` for FASTag's configure too |
 | 2 | OpenMS's Windows install splits one logical CMake package directory across two destinations, neither complete alone: `<prefix>/CMake/` has only `OpenMSConfig(Version).cmake`; `<prefix>/bin/cmake/OpenMS/` has `OpenMSTargets(.cmake\|-release.cmake)` and `Modules/` (`FindLIBSVM.cmake` etc.) | copy `OpenMSConfig(Version).cmake` **into** the Targets/Modules directory, not the reverse — `OpenMSTargets.cmake` computes `${_IMPORT_PREFIX}` by walking a fixed parent-directory count baked in at its *original* install depth, so moving it instead silently corrupts every DLL path it exports |
 | 3 | Test/benchmark binaries linking OpenMS failed at run time, `0xc0000135` (`STATUS_DLL_NOT_FOUND`) — Windows has no RPATH/RUNPATH; the loader only searches the `.exe`'s own directory and `PATH` | add OpenMS's, Qt's, contrib's and conda's `bin`/`Library/bin` directories to `PATH` before `ctest` |
 
@@ -119,7 +119,7 @@ Every tag build attaches its own binary to the GitHub Release automatically
 (`gh release upload ... --clobber`, one per platform, racing harmlessly
 across two workflows and five jobs — whichever finishes first creates the
 release itself if it doesn't exist yet). Filenames carry no version
-(`FasTag-<platform>.tar.gz`/`.zip`) so the README's
+(`FASTag-<platform>.tar.gz`/`.zip`) so the README's
 `/releases/latest/download/<name>` links stay valid across every future
 release without editing.
 
@@ -130,7 +130,7 @@ so every tag build takes the "not configured" branch and ships an unsigned
 binary with a `::warning::`, exactly as before this scaffolding was added.
 Adapted from a working reference (BALL/BALLView's `release.yml`), not
 invented — but that project ships a Qt `.app` bundle and an NSIS installer;
-FasTag ships one bare CLI executable, so the macOS path has no
+FASTag ships one bare CLI executable, so the macOS path has no
 `.app`/`.dmg`/entitlements/Sparkle machinery, and — importantly — no
 `stapler staple` step, because stapling only works on bundles, installers
 and disk images, never a lone Mach-O binary. A notarized standalone binary is
@@ -145,12 +145,12 @@ instead verified by Gatekeeper via an online ticket lookup on first run.
 `MACOS_NOTARY_PASSWORD` (an app-specific password for `notarytool`). Requires
 an active Apple Developer Program membership. A Developer ID Application
 certificate is scoped to the **Team**, not to one app — if the same Apple
-Developer account already has one (for another project), it signs FasTag too;
+Developer account already has one (for another project), it signs FASTag too;
 no need for a second certificate.
 
 **To enable Windows signing**, apply to
 [SignPath Foundation](https://signpath.org/)'s free open-source signing
-program for FasTag specifically (enrollment is per-project — a certificate
+program for FASTag specifically (enrollment is per-project — a certificate
 issued for a different project's slug does not cover this one), then add 2
 repo secrets: `SIGNPATH_API_TOKEN` and `SIGNPATH_ORG_ID`. The private key
 never leaves SignPath's HSM; there is no `.pfx` file to manage or lose.

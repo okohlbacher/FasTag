@@ -13,7 +13,7 @@
 
 using namespace OpenMS;
 
-namespace FasTag
+namespace FASTag
 {
   std::string TagReconciler::fold(const std::string& s) const
   {

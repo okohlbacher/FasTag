@@ -1,4 +1,4 @@
-// End-to-end: build a spectrum from a known peptide and require FasTag to read
+// End-to-end: build a spectrum from a known peptide and require FASTag to read
 // that peptide back. Residue masses come from OpenMS, so the test uses OpenMS to
 // build the spectrum too -- if the two disagreed, this would catch it.
 //
@@ -17,7 +17,7 @@
 //     branch still collapses. It looked like a surviving mutation for two
 //     rounds. Check that the mutation changes behaviour before concluding the
 //     test is weak.
-#include "FasTagger.h"
+#include "FASTagger.h"
 
 #include <OpenMS/CHEMISTRY/AASequence.h>
 #include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
@@ -76,15 +76,15 @@ int main()
 
   // 1. clean spectra: the top-ranked tag must read the peptide
   {
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
-    const FasTag::Tables tab(p);
+    const FASTag::Tables tab(p);
     int ok = 0, n = 0;
     for (const auto& pep : peps)
     {
       double pmz = 0;
       const MSSpectrum s = synth(pep, 0, 42, pmz);
-      const auto tags = FasTag::tagSpectrum(s, pmz, 2, p, tab);
+      const auto tags = FASTag::tagSpectrum(s, pmz, 2, p, tab);
       CHECK(!tags.empty(), "no tags for %s", pep.c_str());
       if (tags.empty()) continue;
       ++n;
@@ -97,15 +97,15 @@ int main()
 
   // 2. noise: precision of the reported set must stay high
   {
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02; p.max_tag_count = 10;
-    const FasTag::Tables tab(p);
+    const FASTag::Tables tab(p);
     int good = 0, all = 0;
     for (const auto& pep : peps)
     {
       double pmz = 0;
       const MSSpectrum s = synth(pep, 60, 7, pmz);
-      for (const auto& t : FasTag::tagSpectrum(s, pmz, 2, p, tab))
+      for (const auto& t : FASTag::tagSpectrum(s, pmz, 2, p, tab))
       { ++all; if (reads(pep, t.seq)) ++good; }
     }
     const double prec = all ? double(good) / all : 0;
@@ -122,12 +122,12 @@ int main()
     std::vector<double> prefix{0.0};
     for (size_t i = 1; i <= aa.size(); ++i) prefix.push_back(aa.getPrefix(i).getMonoWeight(Residue::Internal));
 
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
-    const FasTag::Tables tab(p);
+    const FASTag::Tables tab(p);
     double pmz = 0;
     const MSSpectrum s = synth(pep, 0, 1, pmz);
-    const auto tags = FasTag::tagSpectrum(s, pmz, 2, p, tab);
+    const auto tags = FASTag::tagSpectrum(s, pmz, 2, p, tab);
     int placed = 0;
     for (const auto& t : tags)
       for (double a : prefix)
@@ -144,15 +144,15 @@ int main()
   // 4. extension lengthens tags without wrecking them
   {
     const std::string pep = "VGAHAGEYGAEALER";
-    FasTag::Param base;
+    FASTag::Param base;
     base.frag_tol = 0.02; base.tol_ppm = false; base.complement_tol = 0.02;
-    FasTag::Param ext = base; ext.max_extension = 4;
-    const FasTag::Tables tb(base), te(ext);
+    FASTag::Param ext = base; ext.max_extension = 4;
+    const FASTag::Tables tb(base), te(ext);
     double pmz = 0;
     const MSSpectrum s = synth(pep, 0, 1, pmz);
     size_t lb = 0, le = 0;
-    for (const auto& t : FasTag::tagSpectrum(s, pmz, 2, base, tb)) lb = std::max(lb, t.seq.size());
-    const auto grown = FasTag::tagSpectrum(s, pmz, 2, ext, te);
+    for (const auto& t : FASTag::tagSpectrum(s, pmz, 2, base, tb)) lb = std::max(lb, t.seq.size());
+    const auto grown = FASTag::tagSpectrum(s, pmz, 2, ext, te);
     for (const auto& t : grown) le = std::max(le, t.seq.size());
     CHECK(lb == 3, "seed length should be exactly 3, got %zu", lb);
     CHECK(le > lb, "extension produced no longer tag (%zu vs %zu)", le, lb);
@@ -165,13 +165,13 @@ int main()
 
   // 5. determinism -- the tie-breaks exist for this
   {
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02; p.max_extension = 4;
-    const FasTag::Tables tab(p);
+    const FASTag::Tables tab(p);
     double pmz = 0;
     const MSSpectrum s = synth("VGAHAGEYGAEALER", 40, 3, pmz);
-    const auto a = FasTag::tagSpectrum(s, pmz, 2, p, tab);
-    const auto b = FasTag::tagSpectrum(s, pmz, 2, p, tab);
+    const auto a = FASTag::tagSpectrum(s, pmz, 2, p, tab);
+    const auto b = FASTag::tagSpectrum(s, pmz, 2, p, tab);
     bool same = a.size() == b.size();
     for (size_t i = 0; same && i < a.size(); ++i)
       same = a[i].seq == b[i].seq && a[i].evalue == b[i].evalue;
@@ -181,18 +181,18 @@ int main()
 
   // 6. degenerate input must not crash or fabricate
   {
-    FasTag::Param p;
-    const FasTag::Tables tab(p);
+    FASTag::Param p;
+    const FASTag::Tables tab(p);
     MSSpectrum empty;
-    CHECK(FasTag::tagSpectrum(empty, 500, 2, p, tab).empty(), "empty spectrum");
+    CHECK(FASTag::tagSpectrum(empty, 500, 2, p, tab).empty(), "empty spectrum");
     MSSpectrum tiny;
     tiny.emplace_back(100.0, 1.0);
     tiny.emplace_back(200.0, 1.0);
-    CHECK(FasTag::tagSpectrum(tiny, 500, 2, p, tab).empty(), "too few peaks");
+    CHECK(FASTag::tagSpectrum(tiny, 500, 2, p, tab).empty(), "too few peaks");
     double pmz = 0;
     const MSSpectrum s = synth("SAMPLER", 0, 3, pmz);
-    FasTag::tagSpectrum(s, pmz, 0, p, tab);      // unknown charge
-    FasTag::tagSpectrum(s, 0.0, 2, p, tab);      // no precursor
+    FASTag::tagSpectrum(s, pmz, 0, p, tab);      // unknown charge
+    FASTag::tagSpectrum(s, 0.0, 2, p, tab);      // no precursor
     std::printf("6. empty, too-few-peaks, unknown charge and missing precursor all survive\n");
   }
 
@@ -227,14 +227,14 @@ int main()
     // that is really a ranking one. Real spectra carry ~100 peaks and measure
     // far better (see Gapped-Tags-Results); the rank is printed below so a
     // regression in it stays visible.
-    FasTag::Param off;
+    FASTag::Param off;
     off.frag_tol = 0.02; off.tol_ppm = false; off.complement_tol = 0.02;
     off.tag_length = 6; off.max_tag_count = 0; off.max_evalue = 0;
-    FasTag::Param on = off; on.max_gaps = 1;
-    const FasTag::Tables tf(off), tn(on);
+    FASTag::Param on = off; on.max_gaps = 1;
+    const FASTag::Tables tf(off), tn(on);
 
-    const auto without = FasTag::tagSpectrum(holed, pmz, 2, off, tf);
-    const auto with = FasTag::tagSpectrum(holed, pmz, 2, on, tn);
+    const auto without = FASTag::tagSpectrum(holed, pmz, 2, off, tf);
+    const auto with = FASTag::tagSpectrum(holed, pmz, 2, on, tn);
 
     int gapped_correct = 0, gapped_total = 0;
     for (const auto& t : with)
@@ -281,13 +281,13 @@ int main()
   // asserting precisely because it is no longer automatic.
   {
     const std::string pep = "VGAHAGEYGAEALER";
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
     p.tag_length = 6; p.max_gaps = 1; p.max_tag_count = 0;
-    const FasTag::Tables tab(p);
+    const FASTag::Tables tab(p);
     double pmz = 0;
     const MSSpectrum s = synth(pep, 20, 11, pmz);
-    const auto tags = FasTag::tagSpectrum(s, pmz, 2, p, tab);
+    const auto tags = FASTag::tagSpectrum(s, pmz, 2, p, tab);
 
     const double prec_res = pmz * 2 - 2 * Constants::PROTON_MASS_U
                           - EmpiricalFormula("H2O").getMonoWeight();
@@ -348,10 +348,10 @@ int main()
     }
     s.sortByPosition();
 
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
-    const FasTag::Tables tab(p);
-    const auto tags = FasTag::tagSpectrum(s, pmz, 3, p, tab);
+    const FASTag::Tables tab(p);
+    const auto tags = FASTag::tagSpectrum(s, pmz, 3, p, tab);
 
     CHECK(!tags.empty(), "no tags from a charge-3 precursor");
     // Every E-value must be finite and positive. A mismatched population can
@@ -390,10 +390,10 @@ int main()
       y.emplace_back(aa.getSuffix(i).getMonoWeight(Residue::YIon, 1), 0.5 + 0.02 * i);
     y.sortByPosition();
 
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
-    const FasTag::Tables tab(p);
-    const auto tags = FasTag::tagSpectrum(y, pmz, 2, p, tab);
+    const FASTag::Tables tab(p);
+    const auto tags = FASTag::tagSpectrum(y, pmz, 2, p, tab);
 
     auto fold = [](std::string x) { for (char& c : x) if (c == 'I') c = 'L'; return x; };
     const std::string fp = fold(pep);
@@ -446,15 +446,15 @@ int main()
     dup.sortByPosition();
     CHECK(dup.size() > clean.size(), "no duplicates were actually injected");
 
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
     // The cap MUST bind, or duplicates displace nothing and this proves nothing.
     // A first version left the default 100 against ~66 peaks, and passed happily
     // with the collapse removed.
     p.max_peak_count = 30;
-    const FasTag::Tables tab(p);
-    const auto a = FasTag::tagSpectrum(clean, pmz, 2, p, tab);
-    const auto b = FasTag::tagSpectrum(dup, pmz, 2, p, tab);
+    const FASTag::Tables tab(p);
+    const auto a = FASTag::tagSpectrum(clean, pmz, 2, p, tab);
+    const auto b = FASTag::tagSpectrum(dup, pmz, 2, p, tab);
 
     bool same = a.size() == b.size();
     for (size_t i = 0; same && i < a.size(); ++i)
@@ -496,12 +496,12 @@ int main()
     size_t at_edge = 0, past_edge = 0;
     for (int cap : {TL, TL + 1})
     {
-      FasTag::Param p;
+      FASTag::Param p;
       p.frag_tol = 0.02; p.tol_ppm = false; p.complement_tol = 0.02;
       p.max_peak_count = static_cast<size_t>(cap);
       p.tag_length = TL;
-      const FasTag::Tables tab(p);
-      const size_t n = FasTag::tagSpectrum(s, pmz, 2, p, tab).size();
+      const FASTag::Tables tab(p);
+      const size_t n = FASTag::tagSpectrum(s, pmz, 2, p, tab).size();
       if (cap == TL) at_edge = n; else past_edge = n;
     }
     CHECK(at_edge == 0, "cap %d retains too many peaks: %zu tags where a "
@@ -537,19 +537,19 @@ int main()
 
     // A cutoff must be ACTIVE for this test to mean anything: with max_evalue 0
     // nothing can be filtered out and the set equality holds trivially.
-    FasTag::Param base;
+    FASTag::Param base;
     base.frag_tol = 0.02; base.tol_ppm = false; base.complement_tol = 0.02;
     base.tag_length = 6; base.max_gaps = 1; base.max_tag_count = 0;
     base.max_evalue = 20.0;
 
-    FasTag::Param flat = base; flat.gap_penalty = 1.0;
-    FasTag::Param pen  = base; pen.gap_penalty = 100.0;
-    const FasTag::Tables tf(flat), tp(pen);
+    FASTag::Param flat = base; flat.gap_penalty = 1.0;
+    FASTag::Param pen  = base; pen.gap_penalty = 100.0;
+    const FASTag::Tables tf(flat), tp(pen);
 
-    const auto a = FasTag::tagSpectrum(holed, pmz, 2, flat, tf);
-    const auto b = FasTag::tagSpectrum(holed, pmz, 2, pen, tp);
+    const auto a = FASTag::tagSpectrum(holed, pmz, 2, flat, tf);
+    const auto b = FASTag::tagSpectrum(holed, pmz, 2, pen, tp);
 
-    auto keys = [](const std::vector<FasTag::Tag>& v) {
+    auto keys = [](const std::vector<FASTag::Tag>& v) {
       std::vector<std::string> k;
       for (const auto& t : v) k.push_back(t.seq);
       return k;
@@ -574,7 +574,7 @@ int main()
 
   // 14. deisotoping must survive an ion-trap tolerance
   //
-  // OpenMS's deisotoper throws above 100 ppm or 0.1 Da, and FasTag passed the
+  // OpenMS's deisotoper throws above 100 ppm or 0.1 Da, and FASTag passed the
   // fragment tolerance straight through -- so `-deisotope` at the 0.3 Da an ion
   // trap needs killed the tool with an uncaught exception. The combination is
   // reachable by following doc/TEST-DATA.md, which names 0.3 Da for the Eclipse
@@ -582,12 +582,12 @@ int main()
   {
     double pmz = 0;
     const MSSpectrum s = synth("VGAHAGEYGAEALER", 40, 5, pmz);
-    FasTag::Param p;
+    FASTag::Param p;
     p.frag_tol = 0.3; p.tol_ppm = false; p.complement_tol = 0.3;
     p.deisotope = true; p.tag_length = 3;
-    const FasTag::Tables tab(p);
+    const FASTag::Tables tab(p);
     bool threw = false;
-    try { FasTag::tagSpectrum(s, pmz, 2, p, tab); }
+    try { FASTag::tagSpectrum(s, pmz, 2, p, tab); }
     catch (...) { threw = true; }
     CHECK(!threw, "deisotoping threw at a 0.3 Da fragment tolerance");
     std::printf("14. deisotope at 0.3 Da (ion trap): no exception\n");

@@ -1,7 +1,7 @@
 // The one proof worth running in isolation: the DP equals exhaustive enumeration.
 //   The DP is what replaces DirecTag's C(n,k) subset walk, so if it is wrong,
 //   every intensity p-value is wrong and nothing downstream would notice.
-#include <FasTag/ranksum.h>
+#include <FASTag/ranksum.h>
 
 #include <algorithm>
 #include <cmath>
@@ -47,7 +47,7 @@ int main()
   for (int k = 1; k <= 5; ++k)
     for (int n = k; n <= 12; ++n)
     {
-      const auto dp = FasTag::ranksumCounts(k, n);
+      const auto dp = FASTag::ranksumCounts(k, n);
       const auto bf = brute(k, n);
       for (size_t s = 0; s < dp.size(); ++s)
       {
@@ -63,7 +63,7 @@ int main()
     for (int n = k; n <= 60; n += 7)
     {
       double tot = 0;
-      for (double v : FasTag::ranksumCounts(k, n)) tot += v;
+      for (double v : FASTag::ranksumCounts(k, n)) tot += v;
       const double want = binom(n, k);
       CHECK(std::fabs(tot - want) <= want * 1e-9, "k=%d n=%d total mismatch", k, n);
     }
@@ -72,7 +72,7 @@ int main()
   for (int k = 2; k <= 8; ++k)
     for (int n = 20; n <= 150; n += 43)
     {
-      const auto c = FasTag::ranksumCdf(k, n);
+      const auto c = FASTag::ranksumCdf(k, n);
       CHECK(!c.empty(), "empty cdf k=%d n=%d", k, n);
       for (size_t s = 1; s < c.size(); ++s)
         CHECK(c[s] >= c[s - 1], "cdf not monotone k=%d n=%d", k, n);
@@ -83,15 +83,15 @@ int main()
   // Support starts at the sum of the k smallest ranks, reachable exactly one way.
   for (int k = 2; k <= 6; ++k)
   {
-    const auto c = FasTag::ranksumCounts(k, 40);
+    const auto c = FASTag::ranksumCounts(k, 40);
     const int smin = k * (k + 1) / 2;
     for (int s = 0; s < smin; ++s) CHECK(c[s] == 0.0, "mass below min sum k=%d", k);
     CHECK(c[smin] == 1.0, "min sum should be reachable exactly once, k=%d", k);
   }
   std::printf("4. support starts at k(k+1)/2 with a single subset\n");
 
-  CHECK(FasTag::ranksumCounts(0, 5).empty(), "k=0 must be empty");
-  CHECK(FasTag::ranksumCounts(9, 4).empty(), "k>n must be empty");
+  CHECK(FASTag::ranksumCounts(0, 5).empty(), "k=0 must be empty");
+  CHECK(FASTag::ranksumCounts(9, 4).empty(), "k>n must be empty");
   std::printf("5. degenerate (k, n) return empty rather than misbehaving\n");
 
   std::printf(failures ? "\n%d FAILURES\n" : "\nall checks passed\n", failures);

@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace FasTag
+namespace FASTag
 {
   /// One reconciliation of a tag against one database peptide placement.
   struct Reconciliation

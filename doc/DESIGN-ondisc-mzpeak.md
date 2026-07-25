@@ -1,14 +1,14 @@
 # Design: `OnDiscMzPeakExperiment` — streaming random access for mzPeak
 
 A proposal for OpenMS, mirroring `OnDiscMSExperiment` for mzML. Written from
-FasTag's experience of consuming both.
+FASTag's experience of consuming both.
 
 **One-line summary: mzPeak should be *easier* to stream than mzML, not harder,
 and the current interface gives that advantage away.**
 
 ## The problem, measured
 
-FasTag reads mzML with `OnDiscMSExperiment`: pull-based random access,
+FASTag reads mzML with `OnDiscMSExperiment`: pull-based random access,
 `getSpectrum(i)`, one reader per thread. Memory is O(threads):
 
 | input | size | peak RSS |
@@ -35,7 +35,7 @@ Push is not wrong in itself, but it forces two things:
 1. **The consumer cannot control what is resident.** It is handed spectra; it
    cannot say "give me spectrum 40,000 now and nothing else". Any bound it
    imposes is downstream of whatever the reader already assembled.
-2. **The caller must invent its own parallelism.** FasTag buffers into chunks,
+2. **The caller must invent its own parallelism.** FASTag buffers into chunks,
    runs OpenMP over each, then blocks while the next chunk refills
    single-threaded. Decode and compute serialise against each other. The mzML
    path has no such barrier because each thread pulls its own spectrum.
@@ -110,7 +110,7 @@ mzML cannot.
 
 ## Parallelise over row groups, not spectra
 
-The obvious port of FasTag's loop is `#pragma omp for` over `getSpectrum(i)`. For
+The obvious port of FASTag's loop is `#pragma omp for` over `getSpectrum(i)`. For
 Parquet that is wrong: one row group holds many spectra, so per-spectrum random
 access re-reads and re-decodes the same group repeatedly, and two threads on
 neighbouring spectra contend for it.
@@ -148,7 +148,7 @@ has.
 
 Against 23.7 GB today.
 
-## What FasTag would delete
+## What FASTag would delete
 
 `ChunkingConsumer` and its dispatch, ~70 lines, and with them the chunk-refill
 barrier. Both input paths would then run the same pull loop over the same shared
@@ -171,7 +171,7 @@ its readers cannot drift apart.
   confirming rather than assuming.
 - **mzPeak is pre-1.0** — "no stability is guaranteed at this point". This should
   land alongside the format stabilising, not ahead of it.
-- **Chromatograms** appear only for interface symmetry; FasTag does not use them.
+- **Chromatograms** appear only for interface symmetry; FASTag does not use them.
 
 ## Smaller fix worth doing first
 

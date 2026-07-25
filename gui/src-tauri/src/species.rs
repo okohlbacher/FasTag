@@ -38,7 +38,7 @@ pub struct TaxdbInfo {
     kmers: u64,
 }
 
-// FasTag writes enrichment as e.g. "1.4x"; keep the number.
+// FASTag writes enrichment as e.g. "1.4x"; keep the number.
 fn num(s: &str) -> f64 {
     let t = s.trim().trim_end_matches(['x', 'X']);
     t.parse::<f64>().ok().filter(|v| v.is_finite()).unwrap_or(0.0)
@@ -116,7 +116,7 @@ fn read_taxdb_info(path: &str) -> Option<TaxdbInfo> {
     Some(TaxdbInfo { path: path.to_string(), k, kmers })
 }
 
-// The same search order the CLI uses (taxonomyDir_ in FasTag.cpp), so the GUI
+// The same search order the CLI uses (taxonomyDir_ in FASTag.cpp), so the GUI
 // reports on the index the run will actually load.
 fn bundled_taxdb(app: &AppHandle) -> Option<String> {
     let bin = crate::fastag::resolve_binary(app).bin;
@@ -127,8 +127,8 @@ fn bundled_taxdb(app: &AppHandle) -> Option<String> {
             dirs.push(PathBuf::from(env));
         }
     }
-    dirs.push(bin_dir.join("..").join("share").join("FasTag").join("taxonomy"));
-    dirs.push(bin_dir.join("share-FasTag-taxonomy"));
+    dirs.push(bin_dir.join("..").join("share").join("FASTag").join("taxonomy"));
+    dirs.push(bin_dir.join("share-FASTag-taxonomy"));
     dirs.push(bin_dir.join("taxonomy"));
     for d in dirs {
         let p = d.join("tax_k7.taxdb");

@@ -14,7 +14,7 @@
 
 using namespace OpenMS;
 
-namespace FasTag
+namespace FASTag
 {
   namespace
   {

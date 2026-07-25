@@ -1,11 +1,11 @@
-# Building an OpenMS that lets FasTag use the fast reader
+# Building an OpenMS that lets FASTag use the fast reader
 
-FasTag runs correctly against stock OpenMS. It just spends most of its wall time
+FASTag runs correctly against stock OpenMS. It just spends most of its wall time
 waiting for the reader, and stops scaling past about 16 threads no matter how
 many cores it has. On a 5.3 GB mzML with 632,677 spectra that is the difference
 between **60 s and 9 s**.
 
-This is optional. Skip it and everything still works — FasTag detects the
+This is optional. Skip it and everything still works — FASTag detects the
 situation at configure time and again at runtime, and takes the slow path.
 
 ## Why
@@ -45,7 +45,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWITH_GUI=OFF \
 cmake --build build --target OpenMS -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 ```
 
-Point FasTag at it:
+Point FASTag at it:
 
 ```bash
 cmake -S . -B build -DOpenMS_DIR=<your-openms-checkout>/build
@@ -54,7 +54,7 @@ cmake -S . -B build -DOpenMS_DIR=<your-openms-checkout>/build
 Configure prints which path you get:
 
 ```
--- FasTag: fast reader available -- this OpenMS reports per-spectrum metadata
+-- FASTag: fast reader available -- this OpenMS reports per-spectrum metadata
 ```
 
 ## The macOS curl trap
@@ -74,7 +74,7 @@ with an `@rpath` reference to a framework that is on no rpath. Pinning
 
 Note the SDK ships a `.tbd` stub, not a `.dylib`. Pointing at
 `/usr/lib/libcurl.4.dylib` instead leaves `CURL::libcurl` undefined and fails
-differently. FasTag's own `CMakeLists.txt` already does this for its build; the
+differently. FASTag's own `CMakeLists.txt` already does this for its build; the
 OpenMS build has no such guard, which is why it must be passed explicitly.
 
 Check with:
@@ -97,7 +97,7 @@ nm -gU build/lib/libOpenMS.dylib | grep -c handleSpectrumMetadata_   # macOS
 nm -DC build/lib/libOpenMS.so    | grep -c handleSpectrumMetadata_   # Linux
 # expect 1
 
-# 2. does FasTag take the fast path? Run on an INDEXED mzML and look for the
+# 2. does FASTag take the fast path? Run on an INDEXED mzML and look for the
 #    absence of this warning:
 #      "This OpenMS does not report spectrum metadata from the per-spectrum
 #       reader, so the fast path is unavailable"
@@ -109,7 +109,7 @@ cmp fast.tsv slow.tsv && echo identical
 
 A file needs an index for any of this to matter. An `indexedmzML` wrapper is not
 enough — it must contain an actual `<indexList>`, or `openFile` returns false and
-FasTag loads the whole run regardless. This bites test fixtures in particular:
+FASTag loads the whole run regardless. This bites test fixtures in particular:
 a before/after comparison can pass while never exercising the streaming path at
 all.
 
@@ -121,7 +121,7 @@ FileConverter -in in.mzML -out indexed.mzML -write_scan_index true
 
 Only per-spectrum fields move. Run-level `ExperimentalSettings` — instrument
 configuration, sample, and so on — still needs the full parse, so `getMetaData()`
-returns null under `skipMetaData`. That is why FasTag's `-out_spectra` path keeps
+returns null under `skipMetaData`. That is why FASTag's `-out_spectra` path keeps
 the slow load: it needs those settings to write a valid mzML.
 
 ## Status
