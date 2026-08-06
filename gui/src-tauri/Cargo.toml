@@ -1,6 +1,6 @@
 [package]
 name = "fastag"
-version = "0.19.0"
+version = "0.19.1"
 description = "FASTag desktop GUI"
 authors = ["Oliver Kohlbacher and contributors"]
 license = "MIT"
